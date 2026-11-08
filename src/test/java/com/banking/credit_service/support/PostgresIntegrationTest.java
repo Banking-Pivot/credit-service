@@ -67,6 +67,8 @@ public abstract class PostgresIntegrationTest {
         Map<String, String> properties = new HashMap<>(yaml("stub-config/credit-service.yml"));
         properties.put("spring.r2dbc.url", r2dbcUrl());
         properties.put("clients.customer.base-url", CUSTOMERS.url());
+        // No registry in the tests: the service must not register with a real Eureka.
+        properties.put("eureka.client.enabled", "false");
         CONFIG_SERVER = StubConfigServer.start(properties);
         // Read by application.yaml: configserver:${CONFIG_SERVER_URL:http://localhost:8888}
         System.setProperty("CONFIG_SERVER_URL", CONFIG_SERVER.url());

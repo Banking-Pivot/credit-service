@@ -5,7 +5,8 @@ spring:
   # Port, database URL, business zone and the customer-service URL with its timeout and
   # circuit breaker come from the Config Server: banking-config/credit-service.yml and
   # credit-service-<profile>.yml. Secrets (the database user and password) come from Vault:
-  # secret/credit-service and secret/credit-service/<profile>.
+  # secret/credit-service and secret/credit-service/<profile>. Where Eureka is comes from
+  # banking-config/application.yml: the service registers there as credit-service.
   config:
     import:
       - "configserver:${CONFIG_SERVER_URL:http://localhost:8888}"
