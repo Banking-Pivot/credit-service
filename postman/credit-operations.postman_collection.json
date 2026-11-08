@@ -1,397 +1,2285 @@
 {
   "info": {
-    "name": "credit-service - tarjeta, cargo, pago y repetición",
-    "description": "Recorrido reproducible por el API Gateway (perfil dev, puerto 8080) contra credit-service y customer-service: crea un cliente, abre una tarjeta con límite 1000, carga 300 (deuda 300, disponible 700), paga 100 (deuda 200, disponible 800) y repite el pago con el mismo operationId (200, Idempotent-Replayed: true, sin cambiar la deuda ni el número de movimientos). Cada corrida usa un documento, una tarjeta y operationId nuevos, así que se puede repetir sobre la misma base. baseUrl y customerBaseUrl apuntan al gateway; ajústalas si corre en otra dirección.",
+    "name": "credit-service - reglas de negocio de créditos",
+    "description": "Reglas de negocio de credit-service, una carpeta por regla: producto según el tipo de cliente (un préstamo personal activo por persona, préstamos empresariales sin tope), condiciones del producto, consumos de tarjeta hasta el límite, pagos idempotentes, límite y día de pago, cierre con deuda cero, movimientos y reportes. Todo va por el API Gateway (perfil dev, puerto 8080), que necesita discovery-server, customer-service y credit-service arriba; ajusta baseUrl si corre en otra dirección. Corre la colección completa y en orden: cada carpeta usa los clientes y productos de las anteriores. Cada corrida crea clientes, productos y operationId nuevos, así que se puede repetir sobre la misma base.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
     {
-      "name": "01 Crear cliente (customer-service)",
-      "event": [
+      "name": "1. Clientes (customer-service)",
+      "description": "Un cliente PERSONAL, uno BUSINESS y uno inactivo, con documentos nuevos. Ninguno tiene cuenta bancaria: un crédito no la necesita. credit-service consulta al cliente por el gateway solo al abrir el producto.",
+      "item": [
         {
-          "listen": "prerequest",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "// Documento nuevo en cada corrida: customer-service no admite documentos repetidos.",
-              "pm.collectionVariables.set('documentNumber', String(Math.floor(10000000 + Math.random() * 90000000)));"
-            ]
+          "name": "01 Crear cliente PERSONAL STANDARD",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Fecha de negocio (America/Lima, UTC-5) para el reporte.",
+                  "pm.collectionVariables.set('businessDate', new Date(Date.now() - 5 * 3600 * 1000).toISOString().slice(0, 10));",
+                  "// Documento nuevo en cada corrida: customer-service no admite documentos repetidos.",
+                  "pm.collectionVariables.set('personalDocument', String(Math.floor(10000000 + Math.random() * 90000000)));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('Cliente PERSONAL ACTIVE', () => {",
+                  "  pm.expect(body.type).to.eql('PERSONAL');",
+                  "  pm.expect(body.status).to.eql('ACTIVE');",
+                  "});",
+                  "pm.collectionVariables.set('personalId', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/customers",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"PERSONAL\",\n  \"profile\": \"STANDARD\",\n  \"documentType\": \"DNI\",\n  \"documentNumber\": \"{{personalDocument}}\",\n  \"name\": \"Ana Perez\"\n}"
+            }
           }
         },
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('201 Created', () => pm.response.to.have.status(201));",
-              "const body = pm.response.json();",
-              "pm.test('Cliente PERSONAL ACTIVE', () => {",
-              "  pm.expect(body.type).to.eql('PERSONAL');",
-              "  pm.expect(body.status).to.eql('ACTIVE');",
-              "});",
-              "pm.collectionVariables.set('customerId', body.id);"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "url": "{{customerBaseUrl}}/customers",
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"type\": \"PERSONAL\",\n  \"profile\": \"STANDARD\",\n  \"documentType\": \"DNI\",\n  \"documentNumber\": \"{{documentNumber}}\",\n  \"name\": \"Lucia Ramos\"\n}"
-        }
-      }
-    },
-    {
-      "name": "02 Abrir tarjeta con límite 1000",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('201 Created', () => pm.response.to.have.status(201));",
-              "const body = pm.response.json();",
-              "pm.test('Location y ETag de la tarjeta nueva', () => {",
-              "  pm.expect(pm.response.headers.get('Location')).to.eql('/credits/' + body.id);",
-              "  pm.expect(pm.response.headers.get('ETag')).to.eql('\"0\"');",
-              "});",
-              "pm.test('CREDIT_CARD ACTIVE con deuda 0 y disponible 1000', () => {",
-              "  pm.expect(body.customerId).to.eql(pm.collectionVariables.get('customerId'));",
-              "  pm.expect(body.type).to.eql('CREDIT_CARD');",
-              "  pm.expect(body.status).to.eql('ACTIVE');",
-              "  pm.expect(body.creditLimit).to.eql(1000);",
-              "  pm.expect(body.outstandingDebt).to.eql(0);",
-              "  pm.expect(body.availableCredit).to.eql(1000);",
-              "  pm.expect(body).to.not.have.property('principal');",
-              "});",
-              "pm.collectionVariables.set('creditId', body.id);"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "url": "{{baseUrl}}/credits",
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"customerId\": \"{{customerId}}\",\n  \"type\": \"CREDIT_CARD\",\n  \"currency\": \"PEN\",\n  \"creditLimit\": 1000.00,\n  \"paymentDueDay\": 15\n}"
-        }
-      }
-    },
-    {
-      "name": "03 Cargar 300",
-      "event": [
-        {
-          "listen": "prerequest",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.collectionVariables.set('chargeOperationId', pm.variables.replaceIn('{{$guid}}'));"
-            ]
+          "name": "02 Crear cliente BUSINESS STANDARD",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// RUC nuevo en cada corrida: customer-service no admite documentos repetidos.",
+                  "pm.collectionVariables.set('businessDocument', '20' + String(Math.floor(100000000 + Math.random() * 900000000)));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('Cliente BUSINESS STANDARD ACTIVE', () => {",
+                  "  pm.expect(body.type).to.eql('BUSINESS');",
+                  "  pm.expect(body.profile).to.eql('STANDARD');",
+                  "  pm.expect(body.status).to.eql('ACTIVE');",
+                  "});",
+                  "pm.collectionVariables.set('businessId', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/customers",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"BUSINESS\",\n  \"profile\": \"STANDARD\",\n  \"documentType\": \"RUC\",\n  \"documentNumber\": \"{{businessDocument}}\",\n  \"name\": \"Inversiones del Sur SA\"\n}"
+            }
           }
         },
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('201 Created, sin Idempotent-Replayed', () => {",
-              "  pm.response.to.have.status(201);",
-              "  pm.expect(pm.response.headers.has('Idempotent-Replayed')).to.be.false;",
-              "});",
-              "const body = pm.response.json();",
-              "pm.test('Deuda 300 y disponible 700 después del cargo', () => {",
-              "  pm.expect(body.operationId).to.eql(pm.collectionVariables.get('chargeOperationId'));",
-              "  pm.expect(body.type).to.eql('CHARGE');",
-              "  pm.expect(body.status).to.eql('COMPLETED');",
-              "  pm.expect(body.amount).to.eql(300);",
-              "  pm.expect(body.outstandingDebtAfter).to.eql(300);",
-              "  pm.expect(body.availableCreditAfter).to.eql(700);",
-              "});"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "url": "{{baseUrl}}/credits/{{creditId}}/charges",
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"operationId\": \"{{chargeOperationId}}\",\n  \"amount\": 300.00,\n  \"currency\": \"PEN\",\n  \"description\": \"Supermercado\"\n}"
-        }
-      }
-    },
-    {
-      "name": "04 Consultar deuda: 300",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('200 OK', () => pm.response.to.have.status(200));",
-              "const body = pm.response.json();",
-              "pm.test('Deuda 300 de una tarjeta con límite 1000', () => {",
-              "  pm.expect(body.creditId).to.eql(pm.collectionVariables.get('creditId'));",
-              "  pm.expect(body.outstandingDebt).to.eql(300);",
-              "  pm.expect(body.creditLimit).to.eql(1000);",
-              "});"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": "{{baseUrl}}/credits/{{creditId}}/debt"
-      }
-    },
-    {
-      "name": "05 Consultar disponible: 700",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('200 OK', () => pm.response.to.have.status(200));",
-              "const body = pm.response.json();",
-              "pm.test('Deuda 300 y disponible 700', () => {",
-              "  pm.expect(body.outstandingDebt).to.eql(300);",
-              "  pm.expect(body.availableCredit).to.eql(700);",
-              "});"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": "{{baseUrl}}/credits/{{creditId}}/available-balance"
-      }
-    },
-    {
-      "name": "06 Pagar 100",
-      "event": [
-        {
-          "listen": "prerequest",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "// La repetición del paso 08 reutiliza esta clave.",
-              "pm.collectionVariables.set('paymentOperationId', pm.variables.replaceIn('{{$guid}}'));"
-            ]
+          "name": "03 Crear cliente inactivo, PERSONAL STANDARD",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Documento nuevo en cada corrida: customer-service no admite documentos repetidos.",
+                  "pm.collectionVariables.set('inactiveDocument', String(Math.floor(10000000 + Math.random() * 90000000)));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('Cliente PERSONAL STANDARD ACTIVE', () => {",
+                  "  pm.expect(body.type).to.eql('PERSONAL');",
+                  "  pm.expect(body.profile).to.eql('STANDARD');",
+                  "  pm.expect(body.status).to.eql('ACTIVE');",
+                  "});",
+                  "pm.collectionVariables.set('inactiveId', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/customers",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"PERSONAL\",\n  \"profile\": \"STANDARD\",\n  \"documentType\": \"DNI\",\n  \"documentNumber\": \"{{inactiveDocument}}\",\n  \"name\": \"Diego Luna\"\n}"
+            }
           }
         },
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('201 Created, sin Idempotent-Replayed', () => {",
-              "  pm.response.to.have.status(201);",
-              "  pm.expect(pm.response.headers.has('Idempotent-Replayed')).to.be.false;",
-              "});",
-              "const body = pm.response.json();",
-              "pm.test('Deuda 200 y disponible 800 después del pago', () => {",
-              "  pm.expect(body.operationId).to.eql(pm.collectionVariables.get('paymentOperationId'));",
-              "  pm.expect(body.type).to.eql('PAYMENT');",
-              "  pm.expect(body.amount).to.eql(100);",
-              "  pm.expect(body.outstandingDebtAfter).to.eql(200);",
-              "  pm.expect(body.availableCreditAfter).to.eql(800);",
-              "});",
-              "pm.collectionVariables.set('paymentResult', JSON.stringify(body));"
-            ]
+          "name": "04 Desactivar cliente inactivo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "If-Match",
+                "value": "\"0\""
+              }
+            ],
+            "url": "{{baseUrl}}/customers/{{inactiveId}}"
           }
         }
-      ],
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "url": "{{baseUrl}}/credits/{{creditId}}/payments",
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"operationId\": \"{{paymentOperationId}}\",\n  \"amount\": 100.00,\n  \"currency\": \"PEN\"\n}"
-        }
-      }
+      ]
     },
     {
-      "name": "07 Consultar disponible y movimientos: 200 / 800, 2 movimientos",
-      "event": [
+      "name": "2. Producto según el tipo de cliente",
+      "description": "El préstamo personal es para clientes PERSONAL y como máximo uno activo por cliente (409). El préstamo empresarial es para BUSINESS, sin tope. La tarjeta de crédito es para los dos tipos. El cliente tiene que existir y estar ACTIVE. Un préstamo nace con deuda igual al capital y un movimiento DISBURSEMENT.",
+      "item": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('200 OK', () => pm.response.to.have.status(200));",
-              "const body = pm.response.json();",
-              "pm.test('Deuda 200 y disponible 800', () => {",
-              "  pm.expect(body.outstandingDebt).to.eql(200);",
-              "  pm.expect(body.availableCredit).to.eql(800);",
-              "});",
-              "pm.sendRequest(pm.collectionVariables.get('baseUrl') + '/credits/' + pm.collectionVariables.get('creditId') + '/movements', (error, response) => {",
-              "  pm.test('Historial con el cargo y el pago, el más reciente primero', () => {",
-              "    pm.expect(error).to.be.null;",
-              "    const history = response.json();",
-              "    pm.expect(history.totalElements).to.eql(2);",
-              "    pm.expect(history.items.map(item => item.type)).to.eql(['PAYMENT', 'CHARGE']);",
-              "    pm.collectionVariables.set('movementCount', String(history.totalElements));",
-              "  });",
-              "});"
-            ]
+          "name": "05 PERSONAL abre préstamo personal de 5000",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('PERSONAL_LOAN PEN ACTIVE con deuda 5000', () => {",
+                  "  pm.expect(body.type).to.eql('PERSONAL_LOAN');",
+                  "  pm.expect(body.currency).to.eql('PEN');",
+                  "  pm.expect(body.status).to.eql('ACTIVE');",
+                  "  pm.expect(body.outstandingDebt).to.eql(5000);",
+                  "  pm.expect(pm.response.headers.get('Location')).to.eql('/credits/' + body.id);",
+                  "  pm.expect(pm.response.headers.get('ETag')).to.eql('\"0\"');",
+                  "  pm.expect(body.principal).to.eql(5000);",
+                  "  pm.expect(body.customerType).to.eql('PERSONAL');",
+                  "});",
+                  "pm.collectionVariables.set('personalLoanId', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{personalId}}\",\n  \"type\": \"PERSONAL_LOAN\",\n  \"currency\": \"PEN\",\n  \"principal\": 5000,\n  \"paymentDueDay\": 5\n}"
+            }
+          }
+        },
+        {
+          "name": "06 Segundo préstamo personal activo (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 PERSONAL_LOAN_ALREADY_EXISTS', () => {",
+                  "  pm.response.to.have.status(409);",
+                  "  pm.expect(pm.response.json().code).to.eql('PERSONAL_LOAN_ALREADY_EXISTS');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{personalId}}\",\n  \"type\": \"PERSONAL_LOAN\",\n  \"currency\": \"PEN\",\n  \"principal\": 1000,\n  \"paymentDueDay\": 5\n}"
+            }
+          }
+        },
+        {
+          "name": "07 PERSONAL abre préstamo empresarial (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 PRODUCT_NOT_ALLOWED', () => {",
+                  "  pm.response.to.have.status(422);",
+                  "  pm.expect(pm.response.json().code).to.eql('PRODUCT_NOT_ALLOWED');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{personalId}}\",\n  \"type\": \"BUSINESS_LOAN\",\n  \"currency\": \"PEN\",\n  \"principal\": 1000,\n  \"paymentDueDay\": 15\n}"
+            }
+          }
+        },
+        {
+          "name": "08 BUSINESS abre préstamo personal (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 PRODUCT_NOT_ALLOWED', () => {",
+                  "  pm.response.to.have.status(422);",
+                  "  pm.expect(pm.response.json().code).to.eql('PRODUCT_NOT_ALLOWED');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{businessId}}\",\n  \"type\": \"PERSONAL_LOAN\",\n  \"currency\": \"PEN\",\n  \"principal\": 1000,\n  \"paymentDueDay\": 15\n}"
+            }
+          }
+        },
+        {
+          "name": "09 BUSINESS abre préstamo empresarial de 20000",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('BUSINESS_LOAN PEN ACTIVE con deuda 20000', () => {",
+                  "  pm.expect(body.type).to.eql('BUSINESS_LOAN');",
+                  "  pm.expect(body.currency).to.eql('PEN');",
+                  "  pm.expect(body.status).to.eql('ACTIVE');",
+                  "  pm.expect(body.outstandingDebt).to.eql(20000);",
+                  "  pm.expect(pm.response.headers.get('Location')).to.eql('/credits/' + body.id);",
+                  "  pm.expect(pm.response.headers.get('ETag')).to.eql('\"0\"');",
+                  "});",
+                  "pm.collectionVariables.set('businessLoanId', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{businessId}}\",\n  \"type\": \"BUSINESS_LOAN\",\n  \"currency\": \"PEN\",\n  \"principal\": 20000,\n  \"paymentDueDay\": 10\n}"
+            }
+          }
+        },
+        {
+          "name": "10 BUSINESS abre otro préstamo empresarial, USD 8000",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('BUSINESS_LOAN USD ACTIVE con deuda 8000', () => {",
+                  "  pm.expect(body.type).to.eql('BUSINESS_LOAN');",
+                  "  pm.expect(body.currency).to.eql('USD');",
+                  "  pm.expect(body.status).to.eql('ACTIVE');",
+                  "  pm.expect(body.outstandingDebt).to.eql(8000);",
+                  "  pm.expect(pm.response.headers.get('Location')).to.eql('/credits/' + body.id);",
+                  "  pm.expect(pm.response.headers.get('ETag')).to.eql('\"0\"');",
+                  "});",
+                  "pm.collectionVariables.set('businessLoanUsdId', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{businessId}}\",\n  \"type\": \"BUSINESS_LOAN\",\n  \"currency\": \"USD\",\n  \"principal\": 8000,\n  \"paymentDueDay\": 10\n}"
+            }
+          }
+        },
+        {
+          "name": "11 Préstamos empresariales activos de la empresa",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Dos préstamos empresariales activos', () => {",
+                  "  pm.expect(body.totalElements).to.eql(2);",
+                  "  body.items.forEach(c => pm.expect(c.customerId).to.eql(pm.collectionVariables.get('businessId')));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/credits?customerId={{businessId}}&type=BUSINESS_LOAN&status=ACTIVE"
+          }
+        },
+        {
+          "name": "12 Movimiento de desembolso del préstamo personal",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Un DISBURSEMENT de 5000', () => {",
+                  "  pm.expect(body.items).to.have.lengthOf(1);",
+                  "  pm.expect(body.items[0].type).to.eql('DISBURSEMENT');",
+                  "  pm.expect(body.items[0].amount).to.eql(5000);",
+                  "  pm.expect(body.items[0].outstandingDebtAfter).to.eql(5000);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/credits/{{personalLoanId}}/movements"
+          }
+        },
+        {
+          "name": "13 Cliente que no existe (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 CUSTOMER_NOT_FOUND', () => {",
+                  "  pm.response.to.have.status(422);",
+                  "  pm.expect(pm.response.json().code).to.eql('CUSTOMER_NOT_FOUND');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{$guid}}\",\n  \"type\": \"CREDIT_CARD\",\n  \"currency\": \"PEN\",\n  \"creditLimit\": 1000,\n  \"paymentDueDay\": 15\n}"
+            }
+          }
+        },
+        {
+          "name": "14 Cliente inactivo (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 CUSTOMER_INACTIVE', () => {",
+                  "  pm.response.to.have.status(422);",
+                  "  pm.expect(pm.response.json().code).to.eql('CUSTOMER_INACTIVE');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{inactiveId}}\",\n  \"type\": \"CREDIT_CARD\",\n  \"currency\": \"PEN\",\n  \"creditLimit\": 1000,\n  \"paymentDueDay\": 15\n}"
+            }
           }
         }
-      ],
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": "{{baseUrl}}/credits/{{creditId}}/available-balance"
-      }
+      ]
     },
     {
-      "name": "08 Repetir el pago con el mismo operationId",
-      "event": [
+      "name": "3. Condiciones del producto",
+      "description": "Un préstamo lleva capital (principal) y no límite; una tarjeta lleva límite (creditLimit) y no capital. Si no coinciden con el tipo, 422 INVALID_PRODUCT_TERMS. El día de pago va de 1 a 28 y los montos usan como máximo dos decimales; si no, 400.",
+      "item": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('200 OK con Idempotent-Replayed: true', () => {",
-              "  pm.response.to.have.status(200);",
-              "  pm.expect(pm.response.headers.get('Idempotent-Replayed')).to.eql('true');",
-              "});",
-              "pm.test('Devuelve el resultado original del pago', () => {",
-              "  pm.expect(pm.response.json()).to.eql(JSON.parse(pm.collectionVariables.get('paymentResult')));",
-              "});"
-            ]
+          "name": "15 Préstamo con límite de crédito (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 INVALID_PRODUCT_TERMS', () => {",
+                  "  pm.response.to.have.status(422);",
+                  "  pm.expect(pm.response.json().code).to.eql('INVALID_PRODUCT_TERMS');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{businessId}}\",\n  \"type\": \"BUSINESS_LOAN\",\n  \"currency\": \"PEN\",\n  \"principal\": 1000,\n  \"creditLimit\": 1000,\n  \"paymentDueDay\": 15\n}"
+            }
+          }
+        },
+        {
+          "name": "16 Tarjeta sin límite (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 INVALID_PRODUCT_TERMS', () => {",
+                  "  pm.response.to.have.status(422);",
+                  "  pm.expect(pm.response.json().code).to.eql('INVALID_PRODUCT_TERMS');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{businessId}}\",\n  \"type\": \"CREDIT_CARD\",\n  \"currency\": \"PEN\",\n  \"paymentDueDay\": 15\n}"
+            }
+          }
+        },
+        {
+          "name": "17 Tarjeta con capital (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 INVALID_PRODUCT_TERMS', () => {",
+                  "  pm.response.to.have.status(422);",
+                  "  pm.expect(pm.response.json().code).to.eql('INVALID_PRODUCT_TERMS');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{businessId}}\",\n  \"type\": \"CREDIT_CARD\",\n  \"currency\": \"PEN\",\n  \"principal\": 500,\n  \"creditLimit\": 1000,\n  \"paymentDueDay\": 15\n}"
+            }
+          }
+        },
+        {
+          "name": "18 Día de pago 29 (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 INVALID_REQUEST', () => {",
+                  "  pm.response.to.have.status(400);",
+                  "  pm.expect(pm.response.json().code).to.eql('INVALID_REQUEST');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{businessId}}\",\n  \"type\": \"CREDIT_CARD\",\n  \"currency\": \"PEN\",\n  \"creditLimit\": 1000,\n  \"paymentDueDay\": 29\n}"
+            }
+          }
+        },
+        {
+          "name": "19 Capital con tres decimales (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 INVALID_REQUEST', () => {",
+                  "  pm.response.to.have.status(400);",
+                  "  pm.expect(pm.response.json().code).to.eql('INVALID_REQUEST');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{businessId}}\",\n  \"type\": \"BUSINESS_LOAN\",\n  \"currency\": \"PEN\",\n  \"principal\": 1000.555,\n  \"paymentDueDay\": 15\n}"
+            }
           }
         }
-      ],
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "url": "{{baseUrl}}/credits/{{creditId}}/payments",
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"operationId\": \"{{paymentOperationId}}\",\n  \"amount\": 100.00,\n  \"currency\": \"PEN\"\n}"
-        }
-      }
+      ]
     },
     {
-      "name": "09 Confirmar que la repetición no cambió nada",
-      "event": [
+      "name": "4. Tarjeta de crédito: consumos hasta el límite",
+      "description": "La tarjeta nace sin deuda. Cada consumo sube la deuda y baja el disponible (límite menos deuda); un consumo mayor al disponible se rechaza. Solo las tarjetas aceptan consumos y tienen saldo disponible, y la operación usa la moneda del producto.",
+      "item": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('200 OK', () => pm.response.to.have.status(200));",
-              "const body = pm.response.json();",
-              "pm.test('Deuda y disponible iguales: 200 / 800', () => {",
-              "  pm.expect(body.outstandingDebt).to.eql(200);",
-              "  pm.expect(body.availableCredit).to.eql(800);",
-              "});",
-              "pm.sendRequest(pm.collectionVariables.get('baseUrl') + '/credits/' + pm.collectionVariables.get('creditId') + '/movements', (error, response) => {",
-              "  pm.test('Mismo número de movimientos que antes de repetir', () => {",
-              "    pm.expect(error).to.be.null;",
-              "    pm.expect(String(response.json().totalElements)).to.eql(pm.collectionVariables.get('movementCount'));",
-              "  });",
-              "});"
-            ]
+          "name": "20 PERSONAL abre tarjeta con límite 1000",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('CREDIT_CARD PEN ACTIVE con deuda 0', () => {",
+                  "  pm.expect(body.type).to.eql('CREDIT_CARD');",
+                  "  pm.expect(body.currency).to.eql('PEN');",
+                  "  pm.expect(body.status).to.eql('ACTIVE');",
+                  "  pm.expect(body.outstandingDebt).to.eql(0);",
+                  "  pm.expect(pm.response.headers.get('Location')).to.eql('/credits/' + body.id);",
+                  "  pm.expect(pm.response.headers.get('ETag')).to.eql('\"0\"');",
+                  "  pm.expect(body.creditLimit).to.eql(1000);",
+                  "  pm.expect(body.availableCredit).to.eql(1000);",
+                  "});",
+                  "pm.collectionVariables.set('cardId', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{personalId}}\",\n  \"type\": \"CREDIT_CARD\",\n  \"currency\": \"PEN\",\n  \"creditLimit\": 1000,\n  \"paymentDueDay\": 15\n}"
+            }
+          }
+        },
+        {
+          "name": "21 BUSINESS abre tarjeta con límite 3000",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('CREDIT_CARD PEN ACTIVE con deuda 0', () => {",
+                  "  pm.expect(body.type).to.eql('CREDIT_CARD');",
+                  "  pm.expect(body.currency).to.eql('PEN');",
+                  "  pm.expect(body.status).to.eql('ACTIVE');",
+                  "  pm.expect(body.outstandingDebt).to.eql(0);",
+                  "  pm.expect(pm.response.headers.get('Location')).to.eql('/credits/' + body.id);",
+                  "  pm.expect(pm.response.headers.get('ETag')).to.eql('\"0\"');",
+                  "  pm.expect(body.customerType).to.eql('BUSINESS');",
+                  "});",
+                  "pm.collectionVariables.set('businessCardId', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{businessId}}\",\n  \"type\": \"CREDIT_CARD\",\n  \"currency\": \"PEN\",\n  \"creditLimit\": 3000,\n  \"paymentDueDay\": 20\n}"
+            }
+          }
+        },
+        {
+          "name": "22 Consumir 300",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('operationId', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('CHARGE: deuda 300, disponible 700', () => {",
+                  "  pm.expect(body.type).to.eql('CHARGE');",
+                  "  pm.expect(body.outstandingDebtAfter).to.eql(300);",
+                  "  pm.expect(body.availableCreditAfter).to.eql(700);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{cardId}}/charges",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 300,\n  \"currency\": \"PEN\",\n  \"description\": \"Supermercado\"\n}"
+            }
+          }
+        },
+        {
+          "name": "23 Consumir 800 con 700 disponibles (422)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('operationId', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 INSUFFICIENT_AVAILABLE_CREDIT', () => {",
+                  "  pm.response.to.have.status(422);",
+                  "  pm.expect(pm.response.json().code).to.eql('INSUFFICIENT_AVAILABLE_CREDIT');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{cardId}}/charges",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 800,\n  \"currency\": \"PEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "24 Consumir exactamente el disponible, 700",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('operationId', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('Deuda 1000, disponible 0', () => {",
+                  "  pm.expect(body.outstandingDebtAfter).to.eql(1000);",
+                  "  pm.expect(body.availableCreditAfter).to.eql(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{cardId}}/charges",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 700,\n  \"currency\": \"PEN\",\n  \"description\": \"Pasajes\"\n}"
+            }
+          }
+        },
+        {
+          "name": "25 Consumir 0.01 sin disponible (422)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('operationId', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 INSUFFICIENT_AVAILABLE_CREDIT', () => {",
+                  "  pm.response.to.have.status(422);",
+                  "  pm.expect(pm.response.json().code).to.eql('INSUFFICIENT_AVAILABLE_CREDIT');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{cardId}}/charges",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 0.01,\n  \"currency\": \"PEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "26 Consumo en USD en una tarjeta PEN (422)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('operationId', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 CURRENCY_MISMATCH', () => {",
+                  "  pm.response.to.have.status(422);",
+                  "  pm.expect(pm.response.json().code).to.eql('CURRENCY_MISMATCH');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{cardId}}/charges",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 10,\n  \"currency\": \"USD\"\n}"
+            }
+          }
+        },
+        {
+          "name": "27 Consumo con un préstamo (422)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('operationId', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 NOT_A_CREDIT_CARD', () => {",
+                  "  pm.response.to.have.status(422);",
+                  "  pm.expect(pm.response.json().code).to.eql('NOT_A_CREDIT_CARD');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{personalLoanId}}/charges",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 10,\n  \"currency\": \"PEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "28 Disponible de la tarjeta",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Límite 1000, deuda 1000, disponible 0', () => {",
+                  "  pm.expect(body.creditLimit).to.eql(1000);",
+                  "  pm.expect(body.outstandingDebt).to.eql(1000);",
+                  "  pm.expect(body.availableCredit).to.eql(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/credits/{{cardId}}/available-balance"
+          }
+        },
+        {
+          "name": "29 Disponible de un préstamo (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 NOT_A_CREDIT_CARD', () => {",
+                  "  pm.response.to.have.status(422);",
+                  "  pm.expect(pm.response.json().code).to.eql('NOT_A_CREDIT_CARD');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/credits/{{personalLoanId}}/available-balance"
           }
         }
-      ],
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": "{{baseUrl}}/credits/{{creditId}}/available-balance"
-      }
+      ]
     },
     {
-      "name": "10 Misma clave con otro monto: 409",
-      "event": [
+      "name": "5. Pagos e idempotencia",
+      "description": "Préstamos y tarjetas aceptan pagos de hasta la deuda pendiente; en la tarjeta lo pagado vuelve a estar disponible. Cada consumo o pago es idempotente por operationId en todo el servicio: repetirlo devuelve 200 con Idempotent-Replayed y no cambia la deuda; la misma clave con otro monto o en otro producto da 409.",
+      "item": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('409 OPERATION_ID_CONFLICT', () => {",
-              "  pm.response.to.have.status(409);",
-              "  pm.expect(pm.response.json().code).to.eql('OPERATION_ID_CONFLICT');",
-              "});"
-            ]
+          "name": "30 Pagar 1500 con deuda de 1000 (422)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('operationId', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 PAYMENT_EXCEEDS_DEBT', () => {",
+                  "  pm.response.to.have.status(422);",
+                  "  pm.expect(pm.response.json().code).to.eql('PAYMENT_EXCEEDS_DEBT');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{cardId}}/payments",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 1500,\n  \"currency\": \"PEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "31 Pagar 400 de la tarjeta",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('paymentOperationId', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('PAYMENT: deuda 600, disponible 400', () => {",
+                  "  pm.expect(body.type).to.eql('PAYMENT');",
+                  "  pm.expect(body.outstandingDebtAfter).to.eql(600);",
+                  "  pm.expect(body.availableCreditAfter).to.eql(400);",
+                  "});",
+                  "pm.collectionVariables.set('paymentResult', pm.response.text());"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{cardId}}/payments",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{paymentOperationId}}\",\n  \"amount\": 400,\n  \"currency\": \"PEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "32 Repetir el pago (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('Idempotent-Replayed y el mismo resultado', () => {",
+                  "  pm.expect(pm.response.headers.get('Idempotent-Replayed')).to.eql('true');",
+                  "  pm.expect(pm.response.json()).to.eql(JSON.parse(pm.collectionVariables.get('paymentResult')));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{cardId}}/payments",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{paymentOperationId}}\",\n  \"amount\": 400,\n  \"currency\": \"PEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "33 Misma clave con otro monto (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 OPERATION_ID_CONFLICT', () => {",
+                  "  pm.response.to.have.status(409);",
+                  "  pm.expect(pm.response.json().code).to.eql('OPERATION_ID_CONFLICT');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{cardId}}/payments",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{paymentOperationId}}\",\n  \"amount\": 50,\n  \"currency\": \"PEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "34 Misma clave en otro producto (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 OPERATION_ID_CONFLICT', () => {",
+                  "  pm.response.to.have.status(409);",
+                  "  pm.expect(pm.response.json().code).to.eql('OPERATION_ID_CONFLICT');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{personalLoanId}}/payments",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{paymentOperationId}}\",\n  \"amount\": 400,\n  \"currency\": \"PEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "35 La deuda se descontó una sola vez",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Deuda 600', () => {",
+                  "  pm.expect(body.outstandingDebt).to.eql(600);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/credits/{{cardId}}/debt"
+          }
+        },
+        {
+          "name": "36 Pagar 1000 del préstamo personal",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('operationId', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('Deuda del préstamo 4000, sin disponible', () => {",
+                  "  pm.expect(body.outstandingDebtAfter).to.eql(4000);",
+                  "  pm.expect(body.availableCreditAfter == null).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{personalLoanId}}/payments",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 1000,\n  \"currency\": \"PEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "37 Deuda del préstamo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Capital 5000, deuda 4000', () => {",
+                  "  pm.expect(body.principal).to.eql(5000);",
+                  "  pm.expect(body.outstandingDebt).to.eql(4000);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/credits/{{personalLoanId}}/debt"
+          }
+        },
+        {
+          "name": "38 Pago en USD de un préstamo PEN (422)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('operationId', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 CURRENCY_MISMATCH', () => {",
+                  "  pm.response.to.have.status(422);",
+                  "  pm.expect(pm.response.json().code).to.eql('CURRENCY_MISMATCH');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{personalLoanId}}/payments",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 10,\n  \"currency\": \"USD\"\n}"
+            }
           }
         }
-      ],
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "url": "{{baseUrl}}/credits/{{creditId}}/payments",
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"operationId\": \"{{paymentOperationId}}\",\n  \"amount\": 150.00,\n  \"currency\": \"PEN\"\n}"
-        }
-      }
+      ]
     },
     {
-      "name": "11 Consulta de account-service: tarjeta activa del cliente",
-      "event": [
+      "name": "6. Límite de crédito y día de pago",
+      "description": "PUT cambia el día de pago de cualquier producto y el límite de la tarjeta, con el ETag vigente en If-Match. El límite nuevo no puede quedar por debajo de la deuda; un préstamo no acepta límite y una tarjeta lo exige.",
+      "item": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('200 OK', () => pm.response.to.have.status(200));",
-              "const body = pm.response.json();",
-              "pm.test('Una tarjeta activa, la de esta corrida', () => {",
-              "  pm.expect(body.totalElements).to.eql(1);",
-              "  pm.expect(body.size).to.eql(1);",
-              "  pm.expect(body.items[0].id).to.eql(pm.collectionVariables.get('creditId'));",
-              "});"
-            ]
+          "name": "39 Consultar la tarjeta",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('creditEtag', pm.response.headers.get('ETag'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/credits/{{cardId}}"
+          }
+        },
+        {
+          "name": "40 Cambiar el límite sin If-Match (428)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('428 IF_MATCH_REQUIRED', () => {",
+                  "  pm.response.to.have.status(428);",
+                  "  pm.expect(pm.response.json().code).to.eql('IF_MATCH_REQUIRED');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{cardId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"paymentDueDay\": 20,\n  \"creditLimit\": 2000\n}"
+            }
+          }
+        },
+        {
+          "name": "41 Límite 500 con deuda de 600 (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 CREDIT_LIMIT_BELOW_DEBT', () => {",
+                  "  pm.response.to.have.status(422);",
+                  "  pm.expect(pm.response.json().code).to.eql('CREDIT_LIMIT_BELOW_DEBT');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "If-Match",
+                "value": "{{creditEtag}}"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{cardId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"paymentDueDay\": 15,\n  \"creditLimit\": 500\n}"
+            }
+          }
+        },
+        {
+          "name": "42 Tarjeta sin límite (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 INVALID_PRODUCT_TERMS', () => {",
+                  "  pm.response.to.have.status(422);",
+                  "  pm.expect(pm.response.json().code).to.eql('INVALID_PRODUCT_TERMS');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "If-Match",
+                "value": "{{creditEtag}}"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{cardId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"paymentDueDay\": 15\n}"
+            }
+          }
+        },
+        {
+          "name": "43 Subir el límite a 2000 y pagar el día 20",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Límite 2000, deuda 600, disponible 1400, día 20', () => {",
+                  "  pm.expect(body.creditLimit).to.eql(2000);",
+                  "  pm.expect(body.outstandingDebt).to.eql(600);",
+                  "  pm.expect(body.availableCredit).to.eql(1400);",
+                  "  pm.expect(body.paymentDueDay).to.eql(20);",
+                  "  pm.expect(pm.response.headers.get('ETag')).to.not.eql(pm.collectionVariables.get('creditEtag'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "If-Match",
+                "value": "{{creditEtag}}"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{cardId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"paymentDueDay\": 20,\n  \"creditLimit\": 2000\n}"
+            }
+          }
+        },
+        {
+          "name": "44 Repetir con el ETag anterior (412)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('412 CREDIT_VERSION_CONFLICT', () => {",
+                  "  pm.response.to.have.status(412);",
+                  "  pm.expect(pm.response.json().code).to.eql('CREDIT_VERSION_CONFLICT');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "If-Match",
+                "value": "{{creditEtag}}"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{cardId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"paymentDueDay\": 25,\n  \"creditLimit\": 3000\n}"
+            }
+          }
+        },
+        {
+          "name": "45 Consultar el préstamo personal",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('creditEtag', pm.response.headers.get('ETag'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/credits/{{personalLoanId}}"
+          }
+        },
+        {
+          "name": "46 Préstamo con límite de crédito (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 INVALID_PRODUCT_TERMS', () => {",
+                  "  pm.response.to.have.status(422);",
+                  "  pm.expect(pm.response.json().code).to.eql('INVALID_PRODUCT_TERMS');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "If-Match",
+                "value": "{{creditEtag}}"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{personalLoanId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"paymentDueDay\": 10,\n  \"creditLimit\": 1000\n}"
+            }
+          }
+        },
+        {
+          "name": "47 Mover el día de pago del préstamo al 10",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Día 10, deuda sin cambios', () => {",
+                  "  pm.expect(body.paymentDueDay).to.eql(10);",
+                  "  pm.expect(body.outstandingDebt).to.eql(4000);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "If-Match",
+                "value": "{{creditEtag}}"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{personalLoanId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"paymentDueDay\": 10\n}"
+            }
           }
         }
-      ],
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": "{{baseUrl}}/credits?customerId={{customerId}}&type=CREDIT_CARD&status=ACTIVE&size=1"
-      }
+      ]
+    },
+    {
+      "name": "7. Cierre",
+      "description": "El cierre es lógico y exige deuda cero; el producto queda CLOSED, con su historial, y no acepta más operaciones (409). Repetirlo con el ETag vigente devuelve 204. Cerrar el préstamo personal libera al cliente para abrir otro: el tope es de un préstamo personal activo.",
+      "item": [
+        {
+          "name": "48 Consultar la tarjeta antes de cerrarla",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('creditEtag', pm.response.headers.get('ETag'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/credits/{{cardId}}"
+          }
+        },
+        {
+          "name": "49 Cerrar la tarjeta con deuda (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 DEBT_NOT_ZERO', () => {",
+                  "  pm.response.to.have.status(422);",
+                  "  pm.expect(pm.response.json().code).to.eql('DEBT_NOT_ZERO');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "If-Match",
+                "value": "{{creditEtag}}"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{cardId}}"
+          }
+        },
+        {
+          "name": "50 Pagar los 600 restantes",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('operationId', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('Deuda 0, disponible 2000', () => {",
+                  "  pm.expect(body.outstandingDebtAfter).to.eql(0);",
+                  "  pm.expect(body.availableCreditAfter).to.eql(2000);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{cardId}}/payments",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 600,\n  \"currency\": \"PEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "51 Consultar la tarjeta pagada",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('creditEtag', pm.response.headers.get('ETag'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/credits/{{cardId}}"
+          }
+        },
+        {
+          "name": "52 Cerrar la tarjeta",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "If-Match",
+                "value": "{{creditEtag}}"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{cardId}}"
+          }
+        },
+        {
+          "name": "53 La tarjeta cerrada sigue legible",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('CLOSED', () => {",
+                  "  pm.expect(body.status).to.eql('CLOSED');",
+                  "});",
+                  "pm.collectionVariables.set('creditEtag', pm.response.headers.get('ETag'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/credits/{{cardId}}"
+          }
+        },
+        {
+          "name": "54 Repetir el cierre con el ETag vigente (204)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "If-Match",
+                "value": "{{creditEtag}}"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{cardId}}"
+          }
+        },
+        {
+          "name": "55 Consumir con la tarjeta cerrada (409)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('operationId', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 CREDIT_CLOSED', () => {",
+                  "  pm.response.to.have.status(409);",
+                  "  pm.expect(pm.response.json().code).to.eql('CREDIT_CLOSED');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{cardId}}/charges",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 10,\n  \"currency\": \"PEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "56 Editar la tarjeta cerrada (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 CREDIT_CLOSED', () => {",
+                  "  pm.response.to.have.status(409);",
+                  "  pm.expect(pm.response.json().code).to.eql('CREDIT_CLOSED');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "If-Match",
+                "value": "{{creditEtag}}"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{cardId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"paymentDueDay\": 15,\n  \"creditLimit\": 2000\n}"
+            }
+          }
+        },
+        {
+          "name": "57 Historial de la tarjeta cerrada",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Cuatro movimientos, del más nuevo al más antiguo', () => {",
+                  "  pm.expect(body.items.map(m => m.type)).to.eql(['PAYMENT', 'PAYMENT', 'CHARGE', 'CHARGE']);",
+                  "  pm.expect(body.items.map(m => m.amount)).to.eql([600, 400, 700, 300]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/credits/{{cardId}}/movements"
+          }
+        },
+        {
+          "name": "58 Consulta de account-service: el cliente ya no tiene tarjeta activa",
+          "description": "Es la consulta que hace account-service antes de abrir un ahorro VIP o una corriente PYME.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('totalElements 0', () => {",
+                  "  pm.expect(body.totalElements).to.eql(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/credits?customerId={{personalId}}&type=CREDIT_CARD&status=ACTIVE&size=1"
+          }
+        },
+        {
+          "name": "59 Pagar los 4000 del préstamo personal",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('operationId', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('Deuda 0', () => {",
+                  "  pm.expect(body.outstandingDebtAfter).to.eql(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{personalLoanId}}/payments",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 4000,\n  \"currency\": \"PEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "60 Consultar el préstamo pagado",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('creditEtag', pm.response.headers.get('ETag'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/credits/{{personalLoanId}}"
+          }
+        },
+        {
+          "name": "61 Cerrar el préstamo personal",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "If-Match",
+                "value": "{{creditEtag}}"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{personalLoanId}}"
+          }
+        },
+        {
+          "name": "62 Con el préstamo cerrado, abrir otro préstamo personal",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('PERSONAL_LOAN PEN ACTIVE con deuda 3000', () => {",
+                  "  pm.expect(body.type).to.eql('PERSONAL_LOAN');",
+                  "  pm.expect(body.currency).to.eql('PEN');",
+                  "  pm.expect(body.status).to.eql('ACTIVE');",
+                  "  pm.expect(body.outstandingDebt).to.eql(3000);",
+                  "  pm.expect(pm.response.headers.get('Location')).to.eql('/credits/' + body.id);",
+                  "  pm.expect(pm.response.headers.get('ETag')).to.eql('\"0\"');",
+                  "});",
+                  "pm.collectionVariables.set('secondPersonalLoanId', body.id);",
+                  "// Prepara el ciclo de consumos de la carpeta siguiente.",
+                  "pm.collectionVariables.unset('loopIndex');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{personalId}}\",\n  \"type\": \"PERSONAL_LOAN\",\n  \"currency\": \"PEN\",\n  \"principal\": 3000,\n  \"paymentDueDay\": 5\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "8. Movimientos y reportes",
+      "description": "Historial completo de un producto, los últimos diez movimientos de una tarjeta (solo tarjetas) y el reporte por producto en un rango de fechas de negocio (como máximo 366 días). La primera petición se repite once veces con setNextRequest.",
+      "item": [
+        {
+          "name": "63 Once consumos de 10 con la tarjeta de la empresa",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const i = Number(pm.collectionVariables.get('loopIndex') || 1);",
+                  "pm.collectionVariables.set('loopIndex', i);",
+                  "pm.collectionVariables.set('operationId', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const i = Number(pm.collectionVariables.get('loopIndex'));",
+                  "pm.test('Consumo ' + i + ': 201 y deuda ' + (10 * i), () => {",
+                  "  pm.response.to.have.status(201);",
+                  "  pm.expect(pm.response.json().outstandingDebtAfter).to.eql(10 * i);",
+                  "});",
+                  "if (i < 11) {",
+                  "  pm.collectionVariables.set('loopIndex', i + 1);",
+                  "  pm.execution.setNextRequest(pm.info.requestName);",
+                  "} else {",
+                  "  pm.collectionVariables.unset('loopIndex');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/credits/{{businessCardId}}/charges",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 10,\n  \"currency\": \"PEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "64 Últimos diez movimientos de la tarjeta",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Diez consumos, del más nuevo al más antiguo', () => {",
+                  "  pm.expect(body.items).to.have.lengthOf(10);",
+                  "  pm.expect(body.items.map(m => m.outstandingDebtAfter)).to.eql([110, 100, 90, 80, 70, 60, 50, 40, 30, 20]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/credits/{{businessCardId}}/movements/latest"
+          }
+        },
+        {
+          "name": "65 Historial completo de la tarjeta",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Once movimientos', () => {",
+                  "  pm.expect(body.totalElements).to.eql(11);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/credits/{{businessCardId}}/movements?size=100"
+          }
+        },
+        {
+          "name": "66 Últimos movimientos de un préstamo (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 NOT_A_CREDIT_CARD', () => {",
+                  "  pm.response.to.have.status(422);",
+                  "  pm.expect(pm.response.json().code).to.eql('NOT_A_CREDIT_CARD');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/credits/{{businessLoanId}}/movements/latest"
+          }
+        },
+        {
+          "name": "67 Reporte por producto de hoy",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "const line = (type, currency) => body.products.find(l => l.type === type && l.currency === currency);",
+                  "const count = (l, type) => (l.movements.find(m => m.type === type) || { count: 0 }).count;",
+                  "pm.test('Rango de hoy en America/Lima', () => {",
+                  "  pm.expect(body.from).to.eql(pm.collectionVariables.get('businessDate'));",
+                  "  pm.expect(body.businessZone).to.eql('America/Lima');",
+                  "});",
+                  "pm.test('Aperturas, cierres y movimientos de esta corrida', () => {",
+                  "  pm.expect(line('PERSONAL_LOAN', 'PEN').creditsOpened).to.be.at.least(2);",
+                  "  pm.expect(line('PERSONAL_LOAN', 'PEN').creditsClosed).to.be.at.least(1);",
+                  "  pm.expect(line('BUSINESS_LOAN', 'USD').creditsOpened).to.be.at.least(1);",
+                  "  pm.expect(line('CREDIT_CARD', 'PEN').creditsOpened).to.be.at.least(2);",
+                  "  pm.expect(line('CREDIT_CARD', 'PEN').creditsClosed).to.be.at.least(1);",
+                  "  pm.expect(count(line('CREDIT_CARD', 'PEN'), 'CHARGE')).to.be.at.least(13);",
+                  "  pm.expect(count(line('PERSONAL_LOAN', 'PEN'), 'DISBURSEMENT')).to.be.at.least(2);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/credits/reports/products?from={{businessDate}}&to={{businessDate}}"
+          }
+        },
+        {
+          "name": "68 Reporte de más de 366 días (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 INVALID_REQUEST', () => {",
+                  "  pm.response.to.have.status(400);",
+                  "  pm.expect(pm.response.json().code).to.eql('INVALID_REQUEST');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/credits/reports/products?from=2024-01-01&to=2025-12-31"
+          }
+        },
+        {
+          "name": "69 Crédito que no existe (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 CREDIT_NOT_FOUND', () => {",
+                  "  pm.response.to.have.status(404);",
+                  "  pm.expect(pm.response.json().code).to.eql('CREDIT_NOT_FOUND');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/credits/{{$guid}}"
+          }
+        }
+      ]
     }
   ],
   "variable": [
@@ -400,23 +2288,63 @@
       "value": "http://localhost:8080"
     },
     {
-      "key": "customerBaseUrl",
-      "value": "http://localhost:8080"
-    },
-    {
-      "key": "documentNumber",
+      "key": "businessDate",
       "value": ""
     },
     {
-      "key": "customerId",
+      "key": "personalDocument",
       "value": ""
     },
     {
-      "key": "creditId",
+      "key": "businessDocument",
       "value": ""
     },
     {
-      "key": "chargeOperationId",
+      "key": "inactiveDocument",
+      "value": ""
+    },
+    {
+      "key": "personalId",
+      "value": ""
+    },
+    {
+      "key": "businessId",
+      "value": ""
+    },
+    {
+      "key": "inactiveId",
+      "value": ""
+    },
+    {
+      "key": "personalLoanId",
+      "value": ""
+    },
+    {
+      "key": "secondPersonalLoanId",
+      "value": ""
+    },
+    {
+      "key": "businessLoanId",
+      "value": ""
+    },
+    {
+      "key": "businessLoanUsdId",
+      "value": ""
+    },
+    {
+      "key": "cardId",
+      "value": ""
+    },
+    {
+      "key": "businessCardId",
+      "value": ""
+    },
+    {
+      "key": "creditEtag",
+      "value": ""
+    },
+    {
+      "key": "operationId",
       "value": ""
     },
     {
@@ -428,7 +2356,7 @@
       "value": ""
     },
     {
-      "key": "movementCount",
+      "key": "loopIndex",
       "value": ""
     }
   ]
