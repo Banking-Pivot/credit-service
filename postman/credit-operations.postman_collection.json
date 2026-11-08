@@ -1,0 +1,435 @@
+{
+  "info": {
+    "name": "credit-service - tarjeta, cargo, pago y repetición",
+    "description": "Recorrido reproducible contra credit-service (perfil dev, puerto 8083) y customer-service (perfil dev, puerto 8081): crea un cliente, abre una tarjeta con límite 1000, carga 300 (deuda 300, disponible 700), paga 100 (deuda 200, disponible 800) y repite el pago con el mismo operationId (200, Idempotent-Replayed: true, sin cambiar la deuda ni el número de movimientos). Cada corrida usa un documento, una tarjeta y operationId nuevos, así que se puede repetir sobre la misma base. baseUrl apunta a credit-service y customerBaseUrl a customer-service; cuando el API Gateway tenga rutas, ambas pueden apuntar a él.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "01 Crear cliente (customer-service)",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Documento nuevo en cada corrida: customer-service no admite documentos repetidos.",
+              "pm.collectionVariables.set('documentNumber', String(Math.floor(10000000 + Math.random() * 90000000)));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('201 Created', () => pm.response.to.have.status(201));",
+              "const body = pm.response.json();",
+              "pm.test('Cliente PERSONAL ACTIVE', () => {",
+              "  pm.expect(body.type).to.eql('PERSONAL');",
+              "  pm.expect(body.status).to.eql('ACTIVE');",
+              "});",
+              "pm.collectionVariables.set('customerId', body.id);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{customerBaseUrl}}/customers",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"type\": \"PERSONAL\",\n  \"profile\": \"STANDARD\",\n  \"documentType\": \"DNI\",\n  \"documentNumber\": \"{{documentNumber}}\",\n  \"name\": \"Lucia Ramos\"\n}"
+        }
+      }
+    },
+    {
+      "name": "02 Abrir tarjeta con límite 1000",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('201 Created', () => pm.response.to.have.status(201));",
+              "const body = pm.response.json();",
+              "pm.test('Location y ETag de la tarjeta nueva', () => {",
+              "  pm.expect(pm.response.headers.get('Location')).to.eql('/credits/' + body.id);",
+              "  pm.expect(pm.response.headers.get('ETag')).to.eql('\"0\"');",
+              "});",
+              "pm.test('CREDIT_CARD ACTIVE con deuda 0 y disponible 1000', () => {",
+              "  pm.expect(body.customerId).to.eql(pm.collectionVariables.get('customerId'));",
+              "  pm.expect(body.type).to.eql('CREDIT_CARD');",
+              "  pm.expect(body.status).to.eql('ACTIVE');",
+              "  pm.expect(body.creditLimit).to.eql(1000);",
+              "  pm.expect(body.outstandingDebt).to.eql(0);",
+              "  pm.expect(body.availableCredit).to.eql(1000);",
+              "  pm.expect(body).to.not.have.property('principal');",
+              "});",
+              "pm.collectionVariables.set('creditId', body.id);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/credits",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"customerId\": \"{{customerId}}\",\n  \"type\": \"CREDIT_CARD\",\n  \"currency\": \"PEN\",\n  \"creditLimit\": 1000.00,\n  \"paymentDueDay\": 15\n}"
+        }
+      }
+    },
+    {
+      "name": "03 Cargar 300",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.collectionVariables.set('chargeOperationId', pm.variables.replaceIn('{{$guid}}'));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('201 Created, sin Idempotent-Replayed', () => {",
+              "  pm.response.to.have.status(201);",
+              "  pm.expect(pm.response.headers.has('Idempotent-Replayed')).to.be.false;",
+              "});",
+              "const body = pm.response.json();",
+              "pm.test('Deuda 300 y disponible 700 después del cargo', () => {",
+              "  pm.expect(body.operationId).to.eql(pm.collectionVariables.get('chargeOperationId'));",
+              "  pm.expect(body.type).to.eql('CHARGE');",
+              "  pm.expect(body.status).to.eql('COMPLETED');",
+              "  pm.expect(body.amount).to.eql(300);",
+              "  pm.expect(body.outstandingDebtAfter).to.eql(300);",
+              "  pm.expect(body.availableCreditAfter).to.eql(700);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/credits/{{creditId}}/charges",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"operationId\": \"{{chargeOperationId}}\",\n  \"amount\": 300.00,\n  \"currency\": \"PEN\",\n  \"description\": \"Supermercado\"\n}"
+        }
+      }
+    },
+    {
+      "name": "04 Consultar deuda: 300",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('Deuda 300 de una tarjeta con límite 1000', () => {",
+              "  pm.expect(body.creditId).to.eql(pm.collectionVariables.get('creditId'));",
+              "  pm.expect(body.outstandingDebt).to.eql(300);",
+              "  pm.expect(body.creditLimit).to.eql(1000);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/credits/{{creditId}}/debt"
+      }
+    },
+    {
+      "name": "05 Consultar disponible: 700",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('Deuda 300 y disponible 700', () => {",
+              "  pm.expect(body.outstandingDebt).to.eql(300);",
+              "  pm.expect(body.availableCredit).to.eql(700);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/credits/{{creditId}}/available-balance"
+      }
+    },
+    {
+      "name": "06 Pagar 100",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// La repetición del paso 08 reutiliza esta clave.",
+              "pm.collectionVariables.set('paymentOperationId', pm.variables.replaceIn('{{$guid}}'));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('201 Created, sin Idempotent-Replayed', () => {",
+              "  pm.response.to.have.status(201);",
+              "  pm.expect(pm.response.headers.has('Idempotent-Replayed')).to.be.false;",
+              "});",
+              "const body = pm.response.json();",
+              "pm.test('Deuda 200 y disponible 800 después del pago', () => {",
+              "  pm.expect(body.operationId).to.eql(pm.collectionVariables.get('paymentOperationId'));",
+              "  pm.expect(body.type).to.eql('PAYMENT');",
+              "  pm.expect(body.amount).to.eql(100);",
+              "  pm.expect(body.outstandingDebtAfter).to.eql(200);",
+              "  pm.expect(body.availableCreditAfter).to.eql(800);",
+              "});",
+              "pm.collectionVariables.set('paymentResult', JSON.stringify(body));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/credits/{{creditId}}/payments",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"operationId\": \"{{paymentOperationId}}\",\n  \"amount\": 100.00,\n  \"currency\": \"PEN\"\n}"
+        }
+      }
+    },
+    {
+      "name": "07 Consultar disponible y movimientos: 200 / 800, 2 movimientos",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('Deuda 200 y disponible 800', () => {",
+              "  pm.expect(body.outstandingDebt).to.eql(200);",
+              "  pm.expect(body.availableCredit).to.eql(800);",
+              "});",
+              "pm.sendRequest(pm.collectionVariables.get('baseUrl') + '/credits/' + pm.collectionVariables.get('creditId') + '/movements', (error, response) => {",
+              "  pm.test('Historial con el cargo y el pago, el más reciente primero', () => {",
+              "    pm.expect(error).to.be.null;",
+              "    const history = response.json();",
+              "    pm.expect(history.totalElements).to.eql(2);",
+              "    pm.expect(history.items.map(item => item.type)).to.eql(['PAYMENT', 'CHARGE']);",
+              "    pm.collectionVariables.set('movementCount', String(history.totalElements));",
+              "  });",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/credits/{{creditId}}/available-balance"
+      }
+    },
+    {
+      "name": "08 Repetir el pago con el mismo operationId",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK con Idempotent-Replayed: true', () => {",
+              "  pm.response.to.have.status(200);",
+              "  pm.expect(pm.response.headers.get('Idempotent-Replayed')).to.eql('true');",
+              "});",
+              "pm.test('Devuelve el resultado original del pago', () => {",
+              "  pm.expect(pm.response.json()).to.eql(JSON.parse(pm.collectionVariables.get('paymentResult')));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/credits/{{creditId}}/payments",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"operationId\": \"{{paymentOperationId}}\",\n  \"amount\": 100.00,\n  \"currency\": \"PEN\"\n}"
+        }
+      }
+    },
+    {
+      "name": "09 Confirmar que la repetición no cambió nada",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('Deuda y disponible iguales: 200 / 800', () => {",
+              "  pm.expect(body.outstandingDebt).to.eql(200);",
+              "  pm.expect(body.availableCredit).to.eql(800);",
+              "});",
+              "pm.sendRequest(pm.collectionVariables.get('baseUrl') + '/credits/' + pm.collectionVariables.get('creditId') + '/movements', (error, response) => {",
+              "  pm.test('Mismo número de movimientos que antes de repetir', () => {",
+              "    pm.expect(error).to.be.null;",
+              "    pm.expect(String(response.json().totalElements)).to.eql(pm.collectionVariables.get('movementCount'));",
+              "  });",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/credits/{{creditId}}/available-balance"
+      }
+    },
+    {
+      "name": "10 Misma clave con otro monto: 409",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('409 OPERATION_ID_CONFLICT', () => {",
+              "  pm.response.to.have.status(409);",
+              "  pm.expect(pm.response.json().code).to.eql('OPERATION_ID_CONFLICT');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/credits/{{creditId}}/payments",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"operationId\": \"{{paymentOperationId}}\",\n  \"amount\": 150.00,\n  \"currency\": \"PEN\"\n}"
+        }
+      }
+    },
+    {
+      "name": "11 Consulta de account-service: tarjeta activa del cliente",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('Una tarjeta activa, la de esta corrida', () => {",
+              "  pm.expect(body.totalElements).to.eql(1);",
+              "  pm.expect(body.size).to.eql(1);",
+              "  pm.expect(body.items[0].id).to.eql(pm.collectionVariables.get('creditId'));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/credits?customerId={{customerId}}&type=CREDIT_CARD&status=ACTIVE&size=1"
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8083"
+    },
+    {
+      "key": "customerBaseUrl",
+      "value": "http://localhost:8081"
+    },
+    {
+      "key": "documentNumber",
+      "value": ""
+    },
+    {
+      "key": "customerId",
+      "value": ""
+    },
+    {
+      "key": "creditId",
+      "value": ""
+    },
+    {
+      "key": "chargeOperationId",
+      "value": ""
+    },
+    {
+      "key": "paymentOperationId",
+      "value": ""
+    },
+    {
+      "key": "paymentResult",
+      "value": ""
+    },
+    {
+      "key": "movementCount",
+      "value": ""
+    }
+  ]
+}

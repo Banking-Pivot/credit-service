@@ -1,0 +1,18 @@
+# Settings served by the stub Config Server in integration tests. Pinned here so tests do not
+# depend on the banking-config repository; same shape as banking-config/credit-service.yml.
+# The open circuit waits 60 s so it cannot half-open in the middle of a test.
+credit:
+  business-zone: America/Lima
+clients:
+  customer:
+    timeout: 2s
+    circuit-breaker:
+      failure-rate-threshold: 50
+      sliding-window-size: 10
+      minimum-number-of-calls: 5
+      wait-duration-in-open-state: 60s
+      permitted-calls-in-half-open-state: 2
+spring:
+  r2dbc:
+    pool:
+      max-size: 20

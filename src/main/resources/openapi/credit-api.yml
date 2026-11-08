@@ -1,0 +1,1174 @@
+openapi: 3.0.3
+info:
+  title: Credit API
+  version: 1.0.0
+  description: |
+    API for credit products: opening, administrative update, logical closing, charges,
+    payments, debt and available credit, movement history and product reports.
+
+    Products and the customers that can open them:
+    - PERSONAL_LOAN: PERSONAL customers. At most one ACTIVE personal loan per customer.
+    - BUSINESS_LOAN: BUSINESS customers. Any number of active business loans.
+    - CREDIT_CARD: PERSONAL and BUSINESS customers. Any number of cards.
+
+    A customer does not need a bank account to hold a credit product. The customer must
+    exist and be ACTIVE in Customer Service when the product is opened; later operations use
+    only the state kept by Credit Service.
+
+    Debt:
+    - A loan starts with outstandingDebt equal to its principal, recorded as a DISBURSEMENT
+      movement at opening. Credit Service does not compute interest or installments; the
+      debt only goes down through payments.
+    - A credit card starts with outstandingDebt zero. Charges increase the debt and payments
+      reduce it. availableCredit = creditLimit - outstandingDebt.
+
+    Amounts use the product currency with at most two decimals and at most twelve integer
+    digits. An amount with more decimals is rejected with 400 INVALID_REQUEST; nothing is
+    rounded. Instants are UTC.
+servers:
+  - url: /
+tags:
+  - name: Credits
+    description: Credit products, debt and available credit.
+  - name: Operations
+    description: Charges and payments. Each call is idempotent by operationId.
+  - name: Movements
+    description: Movement history of a credit product.
+  - name: Reports
+    description: Aggregated reports by product.
+paths:
+  /credits:
+    post:
+      tags: [Credits]
+      operationId: openCredit
+      summary: Open a credit product
+      description: |
+        Checks the customer in Customer Service before writing anything. An unknown or
+        inactive customer, or a product the customer type cannot hold, is rejected with 422.
+        If Customer Service does not answer within two seconds, fails, or its circuit breaker
+        is open, the answer is 503 and nothing is written.
+
+        A loan needs principal and no creditLimit; a card needs creditLimit and no principal.
+        Opening a POST twice creates two products: this operation is not idempotent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpenCreditRequest'
+            examples:
+              creditCard:
+                summary: Credit card with a limit of 1000
+                value:
+                  customerId: 6bd651ef-1a2c-4e9a-b6cd-17d569fa8f44
+                  type: CREDIT_CARD
+                  currency: PEN
+                  creditLimit: 1000.00
+                  paymentDueDay: 15
+              personalLoan:
+                summary: Personal loan of 5000
+                value:
+                  customerId: 6bd651ef-1a2c-4e9a-b6cd-17d569fa8f44
+                  type: PERSONAL_LOAN
+                  currency: PEN
+                  principal: 5000.00
+                  paymentDueDay: 5
+      responses:
+        '201':
+          description: Product opened.
+          headers:
+            Location:
+              description: URI of the new product.
+              schema:
+                type: string
+                example: /credits/2c1f8e4a-7b3d-4f6e-9a1b-3c5d7e9f1a2b
+            ETag:
+              $ref: '#/components/headers/CreditETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreditResponse'
+              example:
+                id: 2c1f8e4a-7b3d-4f6e-9a1b-3c5d7e9f1a2b
+                customerId: 6bd651ef-1a2c-4e9a-b6cd-17d569fa8f44
+                customerType: PERSONAL
+                type: CREDIT_CARD
+                currency: PEN
+                creditLimit: 1000.00
+                outstandingDebt: 0.00
+                availableCredit: 1000.00
+                paymentDueDay: 15
+                status: ACTIVE
+                openedAt: '2026-11-16T15:00:00Z'
+                updatedAt: '2026-11-16T15:00:00Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: The customer already has an ACTIVE personal loan (PERSONAL_LOAN_ALREADY_EXISTS).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                code: PERSONAL_LOAN_ALREADY_EXISTS
+                message: The customer already has an active personal loan.
+                timestamp: '2026-11-16T15:00:00Z'
+                path: /credits
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/BusinessRuleViolation'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+    get:
+      tags: [Credits]
+      operationId: listCredits
+      summary: List credit products using bounded pagination
+      description: |
+        All filters are optional and combine with AND. totalElements counts every product
+        that matches the filters, independently of page and size. A customer without
+        matching products gets 200 with empty items and totalElements 0, never 404; the
+        customer is not looked up in Customer Service.
+
+        Account Service checks for an active credit card with
+        customerId={id}&type=CREDIT_CARD&status=ACTIVE&size=1 and reads totalElements.
+
+        Orders by openedAt ascending, then id ascending. Pages are not snapshots;
+        out-of-range pages return empty items with the real totalElements.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: customerId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: type
+          in: query
+          schema:
+            $ref: '#/components/schemas/CreditType'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/CreditStatus'
+      responses:
+        '200':
+          description: Credit page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreditPageResponse'
+              examples:
+                activeCard:
+                  summary: Customer with one active credit card
+                  value:
+                    items:
+                      - id: 2c1f8e4a-7b3d-4f6e-9a1b-3c5d7e9f1a2b
+                        customerId: 6bd651ef-1a2c-4e9a-b6cd-17d569fa8f44
+                        customerType: PERSONAL
+                        type: CREDIT_CARD
+                        currency: PEN
+                        creditLimit: 1000.00
+                        outstandingDebt: 300.00
+                        availableCredit: 700.00
+                        paymentDueDay: 15
+                        status: ACTIVE
+                        openedAt: '2026-11-16T15:00:00Z'
+                        updatedAt: '2026-11-16T15:05:00Z'
+                    page: 0
+                    size: 1
+                    totalElements: 1
+                    totalPages: 1
+                noMatches:
+                  summary: Customer without matching products
+                  value:
+                    items: []
+                    page: 0
+                    size: 1
+                    totalElements: 0
+                    totalPages: 0
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /credits/{creditId}:
+    parameters:
+      - $ref: '#/components/parameters/CreditId'
+    get:
+      tags: [Credits]
+      operationId: getCredit
+      summary: Get a credit product
+      description: Returns ACTIVE and CLOSED products. The ETag identifies the current revision.
+      responses:
+        '200':
+          description: Credit product.
+          headers:
+            ETag:
+              $ref: '#/components/headers/CreditETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreditResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      tags: [Credits]
+      operationId: updateCredit
+      summary: Update the administrative terms of an active product
+      description: |
+        Replaces the editable terms: paymentDueDay for every product and creditLimit for
+        credit cards. A new credit limit must cover the current outstandingDebt. Type,
+        currency, customer, principal and debt cannot change here; the debt only changes
+        through charges and payments.
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCreditRequest'
+            examples:
+              creditCard:
+                summary: Raise the card limit and move the payment day
+                value:
+                  paymentDueDay: 20
+                  creditLimit: 1500.00
+              loan:
+                summary: Move the payment day of a loan
+                value:
+                  paymentDueDay: 10
+      responses:
+        '200':
+          description: Updated product.
+          headers:
+            ETag:
+              $ref: '#/components/headers/CreditETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreditResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/CreditClosed'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/BusinessRuleViolation'
+        '428':
+          $ref: '#/components/responses/PreconditionRequired'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [Credits]
+      operationId: closeCredit
+      summary: Close a credit product
+      description: |
+        Logical closing: the product stays readable as CLOSED with its full movement
+        history, and accepts no further operations. Requires outstandingDebt zero.
+        Closing a product that is already CLOSED, with its current ETag, changes nothing
+        and answers 204.
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '204':
+          description: Product closed.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          $ref: '#/components/responses/BusinessRuleViolation'
+        '428':
+          $ref: '#/components/responses/PreconditionRequired'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /credits/{creditId}/debt:
+    parameters:
+      - $ref: '#/components/parameters/CreditId'
+    get:
+      tags: [Credits]
+      operationId: getCreditDebt
+      summary: Get the outstanding debt of a credit product
+      responses:
+        '200':
+          description: Current debt.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreditDebtResponse'
+              example:
+                creditId: 2c1f8e4a-7b3d-4f6e-9a1b-3c5d7e9f1a2b
+                type: PERSONAL_LOAN
+                currency: PEN
+                status: ACTIVE
+                principal: 5000.00
+                outstandingDebt: 4200.00
+                asOf: '2026-11-16T15:00:00Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /credits/{creditId}/available-balance:
+    parameters:
+      - $ref: '#/components/parameters/CreditId'
+    get:
+      tags: [Credits]
+      operationId: getAvailableBalance
+      summary: Get the available credit of a credit card
+      description: Credit cards only; a loan answers 422 NOT_A_CREDIT_CARD.
+      responses:
+        '200':
+          description: Available credit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AvailableBalanceResponse'
+              example:
+                creditId: 2c1f8e4a-7b3d-4f6e-9a1b-3c5d7e9f1a2b
+                currency: PEN
+                status: ACTIVE
+                creditLimit: 1000.00
+                outstandingDebt: 200.00
+                availableCredit: 800.00
+                asOf: '2026-11-16T15:10:00Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/BusinessRuleViolation'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /credits/{creditId}/charges:
+    parameters:
+      - $ref: '#/components/parameters/CreditId'
+    post:
+      tags: [Operations]
+      operationId: chargeCredit
+      summary: Charge a purchase to a credit card
+      description: |
+        Requires an ACTIVE credit card, the card currency and an amount not above the
+        available credit. Increases the outstanding debt.
+        See OperationId for idempotency: 201 for a new operation, 200 for a recognized repeat.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChargeRequest'
+            example:
+              operationId: 7d9f1c3e-2b4a-4c6d-8e0f-1a2b3c4d5e6f
+              amount: 300.00
+              currency: PEN
+              description: Supermarket
+      responses:
+        '201':
+          $ref: '#/components/responses/OperationCreated'
+        '200':
+          $ref: '#/components/responses/OperationReplayed'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/OperationConflict'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/BusinessRuleViolation'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /credits/{creditId}/payments:
+    parameters:
+      - $ref: '#/components/parameters/CreditId'
+    post:
+      tags: [Operations]
+      operationId: payCredit
+      summary: Pay part or all of the outstanding debt
+      description: |
+        Accepts loans and credit cards. The amount must use the product currency and cannot
+        exceed the outstanding debt. On a card the paid amount becomes available again.
+        See OperationId for idempotency: 201 for a new operation, 200 for a recognized repeat.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentRequest'
+            example:
+              operationId: 1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d
+              amount: 100.00
+              currency: PEN
+      responses:
+        '201':
+          $ref: '#/components/responses/OperationCreated'
+        '200':
+          $ref: '#/components/responses/OperationReplayed'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/OperationConflict'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/BusinessRuleViolation'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /credits/{creditId}/movements:
+    parameters:
+      - $ref: '#/components/parameters/CreditId'
+    get:
+      tags: [Movements]
+      operationId: listCreditMovements
+      summary: List the movement history of a credit product
+      description: |
+        Newest first: occurredAt descending, then id descending, so movements recorded at
+        the same instant always come in the same order. Includes the history of CLOSED
+        products.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Movement page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MovementPageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /credits/{creditId}/movements/latest:
+    parameters:
+      - $ref: '#/components/parameters/CreditId'
+    get:
+      tags: [Movements]
+      operationId: getLatestCardMovements
+      summary: Get the last ten movements of a credit card
+      description: |
+        Credit cards only; a loan answers 422 NOT_A_CREDIT_CARD. Same order as the history:
+        occurredAt descending, then id descending. Fewer than ten items when the card has
+        fewer movements.
+      responses:
+        '200':
+          description: Latest movements.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LatestMovementsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/BusinessRuleViolation'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /credits/reports/products:
+    get:
+      tags: [Reports]
+      operationId: getProductReport
+      summary: Report by product and currency for a range of business dates
+      description: |
+        from and to are calendar dates in the business time zone (businessZone in the
+        response, America/Lima by default), both inclusive. The range covers the instants
+        from the start of from up to, not including, the start of the day after to.
+        to must not be before from, and the range spans at most 366 days; otherwise 400.
+
+        Returns one line per product type and currency, with zeros where nothing happened.
+        Openings and closings count by the business date of their instant; movements count
+        by the business date of occurredAt. outstandingDebtAtEnd is the debt of the products
+        opened before the end of the range, as it stood at that moment.
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+          example: '2026-11-01'
+        - name: to
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+          example: '2026-11-30'
+      responses:
+        '200':
+          description: Product report.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductReportResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+components:
+  parameters:
+    CreditId:
+      name: creditId
+      in: path
+      required: true
+      description: Server-generated credit product UUID.
+      schema:
+        type: string
+        format: uuid
+    Page:
+      name: page
+      in: query
+      description: Zero-based page number.
+      schema:
+        type: integer
+        format: int32
+        minimum: 0
+        maximum: 10000
+        default: 0
+    Size:
+      name: size
+      in: query
+      description: Maximum number of items per page.
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+        maximum: 100
+        default: 20
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: |
+        Exactly one quoted numeric strong ETag, for example "3".
+        Wildcards, weak ETags and lists are not accepted by this API.
+        Missing header yields 428; malformed header yields 400;
+        a nonmatching revision yields 412.
+      schema:
+        type: string
+        pattern: '^"[0-9]+"$'
+        maxLength: 21
+      example: '"3"'
+  headers:
+    CreditETag:
+      description: |
+        Strong entity tag identifying the product revision as a quoted number. It changes
+        whenever the product representation changes, including the debt.
+        Send it in If-Match when updating or closing the product.
+      schema:
+        type: string
+        pattern: '^"[0-9]+"$'
+      example: '"3"'
+    IdempotentReplayed:
+      description: Present with the value true when the response repeats a recorded operation.
+      schema:
+        type: string
+        enum: ['true']
+  responses:
+    OperationCreated:
+      description: New operation completed and recorded.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OperationResponse'
+          example:
+            operationId: 7d9f1c3e-2b4a-4c6d-8e0f-1a2b3c4d5e6f
+            type: CHARGE
+            status: COMPLETED
+            creditId: 2c1f8e4a-7b3d-4f6e-9a1b-3c5d7e9f1a2b
+            movementId: 5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b
+            amount: 300.00
+            currency: PEN
+            outstandingDebtAfter: 300.00
+            availableCreditAfter: 700.00
+            description: Supermarket
+            occurredAt: '2026-11-16T15:05:00Z'
+    OperationReplayed:
+      description: |
+        Recognized repeat of a completed operation with the same operationId and the same data.
+        The body is the original result, also when later operations changed the debt.
+        No debt changes again.
+      headers:
+        Idempotent-Replayed:
+          $ref: '#/components/headers/IdempotentReplayed'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OperationResponse'
+    OperationConflict:
+      description: |
+        The product is CLOSED (CREDIT_CLOSED), or the operationId already identifies an
+        operation with different data (OPERATION_ID_CONFLICT).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: OPERATION_ID_CONFLICT
+            message: The operationId was already used with different data.
+            timestamp: '2026-11-16T15:00:00Z'
+            path: /credits/2c1f8e4a-7b3d-4f6e-9a1b-3c5d7e9f1a2b/payments
+    CreditClosed:
+      description: The product is CLOSED (CREDIT_CLOSED).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    BadRequest:
+      description: |
+        Malformed JSON, unknown field, invalid UUID, invalid field or parameter (including an
+        amount with more than two decimals), invalid date range or malformed If-Match.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: INVALID_REQUEST
+            message: 'Invalid or missing fields: amount.'
+            timestamp: '2026-11-16T15:00:00Z'
+            path: /credits/2c1f8e4a-7b3d-4f6e-9a1b-3c5d7e9f1a2b/charges
+    NotFound:
+      description: The product in the path does not exist (CREDIT_NOT_FOUND).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: CREDIT_NOT_FOUND
+            message: The credit product does not exist.
+            timestamp: '2026-11-16T15:00:00Z'
+            path: /credits/2c1f8e4a-7b3d-4f6e-9a1b-3c5d7e9f1a2b
+    PreconditionFailed:
+      description: If-Match does not match the current revision (CREDIT_VERSION_CONFLICT). Read the product again.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    PreconditionRequired:
+      description: If-Match header is required (IF_MATCH_REQUIRED).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    UnsupportedMediaType:
+      description: Request body must use application/json.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    BusinessRuleViolation:
+      description: |
+        Well-formed request that breaks a business rule. The code identifies the rule:
+        CUSTOMER_NOT_FOUND, CUSTOMER_INACTIVE, PRODUCT_NOT_ALLOWED, INVALID_PRODUCT_TERMS,
+        INVALID_AMOUNT, NOT_A_CREDIT_CARD, CURRENCY_MISMATCH, INSUFFICIENT_AVAILABLE_CREDIT,
+        PAYMENT_EXCEEDS_DEBT, CREDIT_LIMIT_BELOW_DEBT, DEBT_NOT_ZERO.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: INSUFFICIENT_AVAILABLE_CREDIT
+            message: The charge exceeds the available credit of 700.00.
+            timestamp: '2026-11-16T15:00:00Z'
+            path: /credits/2c1f8e4a-7b3d-4f6e-9a1b-3c5d7e9f1a2b/charges
+    DependencyUnavailable:
+      description: |
+        Customer Service did not answer within two seconds, failed, or its circuit breaker is
+        open (DEPENDENCY_UNAVAILABLE). Nothing was written. Retry later. An unknown or
+        inactive customer is reported with 422, never with 503.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: DEPENDENCY_UNAVAILABLE
+            message: Customer Service is unavailable. Nothing was written; retry later.
+            timestamp: '2026-11-16T15:00:00Z'
+            path: /credits
+    InternalError:
+      description: An unexpected error prevented completion of the request. Nothing was written.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    OperationId:
+      title: OperationId
+      type: string
+      format: uuid
+      description: |
+        Idempotency key generated by the client, one per intended charge or payment.
+        Scope: the whole Credit Service. It is recorded only when the operation completes; a
+        request rejected with 4xx or 5xx records nothing and can be retried with the same key.
+        Repeating a completed operation with the same product in the path, operation type,
+        amount and currency returns 200 with the original result, without changing the debt
+        again, also when the repeat races with the original. The same key with a different
+        product, operation type, amount or currency returns 409 OPERATION_ID_CONFLICT.
+        The description is not compared; a repeat returns the original one.
+      example: 9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+    OpenCreditRequest:
+      title: OpenCreditRequest
+      type: object
+      additionalProperties: false
+      required: [customerId, type, currency, paymentDueDay]
+      properties:
+        customerId:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/CreditType'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        principal:
+          type: number
+          minimum: 0
+          exclusiveMinimum: true
+          maximum: 999999999999.99
+          multipleOf: 0.01
+          x-field-extra-annotation: '@jakarta.validation.constraints.Digits(integer = 12, fraction = 2)'
+          description: Loans only. Amount lent; the initial outstandingDebt.
+          example: 5000.00
+        creditLimit:
+          type: number
+          minimum: 0
+          exclusiveMinimum: true
+          maximum: 999999999999.99
+          multipleOf: 0.01
+          x-field-extra-annotation: '@jakarta.validation.constraints.Digits(integer = 12, fraction = 2)'
+          description: Credit cards only. Maximum outstanding debt.
+          example: 1000.00
+        paymentDueDay:
+          $ref: '#/components/schemas/PaymentDueDay'
+    UpdateCreditRequest:
+      title: UpdateCreditRequest
+      type: object
+      additionalProperties: false
+      required: [paymentDueDay]
+      properties:
+        paymentDueDay:
+          $ref: '#/components/schemas/PaymentDueDay'
+        creditLimit:
+          type: number
+          minimum: 0
+          exclusiveMinimum: true
+          maximum: 999999999999.99
+          multipleOf: 0.01
+          x-field-extra-annotation: '@jakarta.validation.constraints.Digits(integer = 12, fraction = 2)'
+          description: |
+            Required for credit cards and not allowed for loans (INVALID_PRODUCT_TERMS).
+            Must be at least the current outstandingDebt (CREDIT_LIMIT_BELOW_DEBT).
+          example: 1500.00
+    ChargeRequest:
+      title: ChargeRequest
+      type: object
+      additionalProperties: false
+      required: [operationId, amount, currency]
+      properties:
+        operationId:
+          $ref: '#/components/schemas/OperationId'
+        amount:
+          type: number
+          minimum: 0
+          exclusiveMinimum: true
+          maximum: 999999999999.99
+          multipleOf: 0.01
+          x-field-extra-annotation: '@jakarta.validation.constraints.Digits(integer = 12, fraction = 2)'
+          description: Positive amount in the card currency with at most two decimals.
+          example: 300.00
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        description:
+          $ref: '#/components/schemas/OperationDescription'
+    PaymentRequest:
+      title: PaymentRequest
+      type: object
+      additionalProperties: false
+      required: [operationId, amount, currency]
+      properties:
+        operationId:
+          $ref: '#/components/schemas/OperationId'
+        amount:
+          type: number
+          minimum: 0
+          exclusiveMinimum: true
+          maximum: 999999999999.99
+          multipleOf: 0.01
+          x-field-extra-annotation: '@jakarta.validation.constraints.Digits(integer = 12, fraction = 2)'
+          description: Positive amount in the product currency, at most the outstanding debt.
+          example: 100.00
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        description:
+          $ref: '#/components/schemas/OperationDescription'
+    OperationDescription:
+      title: OperationDescription
+      type: string
+      maxLength: 140
+      description: Free text kept with the movement.
+      example: Supermarket
+    PaymentDueDay:
+      title: PaymentDueDay
+      type: integer
+      format: int32
+      minimum: 1
+      maximum: 28
+      description: Day of each month when the payment is due. Editable.
+      example: 15
+    CreditResponse:
+      title: CreditResponse
+      type: object
+      required: [id, customerId, customerType, type, currency, outstandingDebt, paymentDueDay, status, openedAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        customerId:
+          type: string
+          format: uuid
+        customerType:
+          $ref: '#/components/schemas/CustomerType'
+        type:
+          $ref: '#/components/schemas/CreditType'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        principal:
+          type: number
+          description: Loans only. Amount lent.
+          example: 5000.00
+        creditLimit:
+          type: number
+          description: Credit cards only.
+          example: 1000.00
+        outstandingDebt:
+          type: number
+          example: 300.00
+        availableCredit:
+          type: number
+          description: Credit cards only. creditLimit - outstandingDebt.
+          example: 700.00
+        paymentDueDay:
+          $ref: '#/components/schemas/PaymentDueDay'
+        status:
+          $ref: '#/components/schemas/CreditStatus'
+        openedAt:
+          type: string
+          format: date-time
+          example: '2026-11-16T15:00:00Z'
+        updatedAt:
+          type: string
+          format: date-time
+          example: '2026-11-16T15:05:00Z'
+        closedAt:
+          type: string
+          format: date-time
+          description: Present only when the product is CLOSED.
+    CreditPageResponse:
+      title: CreditPageResponse
+      type: object
+      required: [items, page, size, totalElements, totalPages]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/CreditResponse'
+        page:
+          type: integer
+          format: int32
+          example: 0
+        size:
+          type: integer
+          format: int32
+          example: 20
+        totalElements:
+          type: integer
+          format: int64
+          description: Products matching all filters, independently of page and size.
+          example: 1
+        totalPages:
+          type: integer
+          format: int64
+          description: Ceiling of totalElements divided by size; zero when there are no matches.
+          example: 1
+    CreditDebtResponse:
+      title: CreditDebtResponse
+      type: object
+      required: [creditId, type, currency, status, outstandingDebt, asOf]
+      properties:
+        creditId:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/CreditType'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        status:
+          $ref: '#/components/schemas/CreditStatus'
+        principal:
+          type: number
+          description: Loans only.
+        creditLimit:
+          type: number
+          description: Credit cards only.
+        outstandingDebt:
+          type: number
+          example: 4200.00
+        asOf:
+          type: string
+          format: date-time
+    AvailableBalanceResponse:
+      title: AvailableBalanceResponse
+      type: object
+      required: [creditId, currency, status, creditLimit, outstandingDebt, availableCredit, asOf]
+      properties:
+        creditId:
+          type: string
+          format: uuid
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        status:
+          $ref: '#/components/schemas/CreditStatus'
+        creditLimit:
+          type: number
+          example: 1000.00
+        outstandingDebt:
+          type: number
+          example: 200.00
+        availableCredit:
+          type: number
+          example: 800.00
+        asOf:
+          type: string
+          format: date-time
+    OperationResponse:
+      title: OperationResponse
+      type: object
+      description: Result of a charge or payment.
+      required: [operationId, type, status, creditId, movementId, amount, currency, outstandingDebtAfter, occurredAt]
+      properties:
+        operationId:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/OperationType'
+        status:
+          type: string
+          enum: [COMPLETED]
+        creditId:
+          type: string
+          format: uuid
+        movementId:
+          type: string
+          format: uuid
+        amount:
+          type: number
+          example: 300.00
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        outstandingDebtAfter:
+          type: number
+          description: Debt right after this operation.
+          example: 300.00
+        availableCreditAfter:
+          type: number
+          description: Credit cards only. Available credit right after this operation.
+          example: 700.00
+        description:
+          type: string
+        occurredAt:
+          type: string
+          format: date-time
+          example: '2026-11-16T15:05:00Z'
+    MovementResponse:
+      title: MovementResponse
+      type: object
+      required: [id, creditId, operationId, type, amount, currency, outstandingDebtAfter, occurredAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        creditId:
+          type: string
+          format: uuid
+        operationId:
+          type: string
+          format: uuid
+          description: Client key of a charge or payment; a server-generated key for a disbursement.
+        type:
+          $ref: '#/components/schemas/MovementType'
+        amount:
+          type: number
+          example: 300.00
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        outstandingDebtAfter:
+          type: number
+          example: 300.00
+        description:
+          type: string
+        occurredAt:
+          type: string
+          format: date-time
+          example: '2026-11-16T15:05:00Z'
+    MovementPageResponse:
+      title: MovementPageResponse
+      type: object
+      required: [items, page, size, totalElements, totalPages]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/MovementResponse'
+        page:
+          type: integer
+          format: int32
+        size:
+          type: integer
+          format: int32
+        totalElements:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+          format: int64
+    LatestMovementsResponse:
+      title: LatestMovementsResponse
+      type: object
+      required: [creditId, items]
+      properties:
+        creditId:
+          type: string
+          format: uuid
+        items:
+          type: array
+          maxItems: 10
+          items:
+            $ref: '#/components/schemas/MovementResponse'
+    ProductReportResponse:
+      title: ProductReportResponse
+      type: object
+      required: [from, to, businessZone, generatedAt, products]
+      properties:
+        from:
+          type: string
+          format: date
+        to:
+          type: string
+          format: date
+        businessZone:
+          type: string
+          example: America/Lima
+        generatedAt:
+          type: string
+          format: date-time
+        products:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProductReportLine'
+    ProductReportLine:
+      title: ProductReportLine
+      type: object
+      required: [type, currency, creditsOpened, creditsClosed, activeCreditsAtEnd, outstandingDebtAtEnd, movements]
+      properties:
+        type:
+          $ref: '#/components/schemas/CreditType'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        creditsOpened:
+          type: integer
+          format: int64
+        creditsClosed:
+          type: integer
+          format: int64
+        activeCreditsAtEnd:
+          type: integer
+          format: int64
+        outstandingDebtAtEnd:
+          type: number
+          description: Sum of the debt at the end of the range.
+        movements:
+          type: array
+          items:
+            $ref: '#/components/schemas/MovementTotals'
+    MovementTotals:
+      title: MovementTotals
+      type: object
+      required: [type, count, totalAmount]
+      properties:
+        type:
+          $ref: '#/components/schemas/MovementType'
+        count:
+          type: integer
+          format: int64
+        totalAmount:
+          type: number
+    ErrorResponse:
+      title: ErrorResponse
+      type: object
+      required: [code, message, timestamp, path]
+      properties:
+        code:
+          type: string
+          description: Stable machine-readable error identifier.
+          example: CREDIT_VERSION_CONFLICT
+        message:
+          type: string
+          description: Human-readable explanation of the error.
+          example: The credit product changed. Read it again before retrying.
+        timestamp:
+          type: string
+          format: date-time
+          example: '2026-11-16T15:00:00Z'
+        path:
+          type: string
+          example: /credits/2c1f8e4a-7b3d-4f6e-9a1b-3c5d7e9f1a2b
+        traceId:
+          type: string
+          description: Correlation identifier of the request.
+    CreditType:
+      title: CreditType
+      type: string
+      enum: [PERSONAL_LOAN, BUSINESS_LOAN, CREDIT_CARD]
+    CreditStatus:
+      title: CreditStatus
+      type: string
+      enum: [ACTIVE, CLOSED]
+    CustomerType:
+      title: CustomerType
+      type: string
+      enum: [PERSONAL, BUSINESS]
+    CurrencyCode:
+      title: CurrencyCode
+      type: string
+      enum: [PEN, USD]
+    OperationType:
+      title: OperationType
+      type: string
+      enum: [CHARGE, PAYMENT]
+    MovementType:
+      title: MovementType
+      type: string
+      description: DISBURSEMENT is the opening debt of a loan; CHARGE and PAYMENT come from operations.
+      enum: [DISBURSEMENT, CHARGE, PAYMENT]
