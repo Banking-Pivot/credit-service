@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "credit-service - tarjeta, cargo, pago y repetición",
-    "description": "Recorrido reproducible contra credit-service (perfil dev, puerto 8083) y customer-service (perfil dev, puerto 8081): crea un cliente, abre una tarjeta con límite 1000, carga 300 (deuda 300, disponible 700), paga 100 (deuda 200, disponible 800) y repite el pago con el mismo operationId (200, Idempotent-Replayed: true, sin cambiar la deuda ni el número de movimientos). Cada corrida usa un documento, una tarjeta y operationId nuevos, así que se puede repetir sobre la misma base. baseUrl apunta a credit-service y customerBaseUrl a customer-service; cuando el API Gateway tenga rutas, ambas pueden apuntar a él.",
+    "description": "Recorrido reproducible por el API Gateway (perfil dev, puerto 8080) contra credit-service y customer-service: crea un cliente, abre una tarjeta con límite 1000, carga 300 (deuda 300, disponible 700), paga 100 (deuda 200, disponible 800) y repite el pago con el mismo operationId (200, Idempotent-Replayed: true, sin cambiar la deuda ni el número de movimientos). Cada corrida usa un documento, una tarjeta y operationId nuevos, así que se puede repetir sobre la misma base. baseUrl y customerBaseUrl apuntan al gateway; ajústalas si corre en otra dirección.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -397,11 +397,11 @@
   "variable": [
     {
       "key": "baseUrl",
-      "value": "http://localhost:8083"
+      "value": "http://localhost:8080"
     },
     {
       "key": "customerBaseUrl",
-      "value": "http://localhost:8081"
+      "value": "http://localhost:8080"
     },
     {
       "key": "documentNumber",
