@@ -20,8 +20,8 @@ import java.time.Duration;
 public record ClientsProperties(@NotNull @Valid Customer customer) {
 
     /**
-     * Customer Service. While the API Gateway and Eureka are pending, the base URL points at
-     * Customer Service itself ({@code CUSTOMER_API_BASE_URL}); later it can point at the Gateway.
+     * Customer Service, reached through the API Gateway: the base URL is the Gateway's
+     * ({@code CUSTOMER_API_BASE_URL}).
      *
      * @param timeout limit per call before the answer counts as unavailable
      */

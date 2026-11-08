@@ -16,10 +16,8 @@ import reactor.core.publisher.Mono;
 import java.util.UUID;
 
 /**
- * Customer Service, called directly while the API Gateway and Eureka are pending:
- * {@code GET /customers/{customerId}} of {@code customer-api.yml} at
- * {@code clients.customer.base-url}. Pointing that URL at the Gateway later needs no code
- * change.
+ * Customer Service through the API Gateway: {@code GET /customers/{customerId}} of
+ * {@code customer-api.yml} at {@code clients.customer.base-url}, the Gateway's address.
  *
  * <ul>
  *   <li>200: the customer, ACTIVE or INACTIVE.</li>
