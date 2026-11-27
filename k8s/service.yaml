@@ -1,0 +1,13 @@
+# Inside the cluster the service is reached at http://credit-service:8083
+apiVersion: v1
+kind: Service
+metadata:
+  name: credit-service
+  labels:
+    app: credit-service
+spec:
+  selector:
+    app: credit-service
+  ports:
+    - port: 8083
+      targetPort: 8083

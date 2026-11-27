@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: credit-service
+  labels:
+    app: credit-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: credit-service
+  template:
+    metadata:
+      labels:
+        app: credit-service
+    spec:
+      # Kubernetes would add one variable per Service of the namespace (API_GATEWAY_PORT=tcp://...);
+      # the services are found by name, so those variables are left out.
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      # Starts the service only when what it reads at startup is there: the Config Server and the AppRole file Vault writes for it.
+      initContainers:
+        - name: wait-for-dependencies
+          image: credit-service:0.0.1-SNAPSHOT
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "until curl -fs http://config-server:8888/application/default > /dev/null; do sleep 3; done && until [ -s /run/approle/credit-service.properties ]; do sleep 3; done"]
+          volumeMounts:
+            - name: approle
+              mountPath: /run/approle
+              readOnly: true
+      containers:
+        - name: credit-service
+          # Built with: ./mvnw clean verify && docker build -t credit-service:0.0.1-SNAPSHOT .
+          image: credit-service:0.0.1-SNAPSHOT
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8083
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: "dev"
+            - name: CONFIG_SERVER_URL
+              value: "http://config-server:8888"
+            - name: EUREKA_URL
+              value: "http://discovery-server:8761/eureka/"
+            - name: EUREKA_INSTANCE_HOSTNAME
+              value: "credit-service"
+            - name: VAULT_URI
+              value: "http://vault:8200"
+            - name: VAULT_APPROLE_FILE
+              value: "/run/approle/credit-service.properties"
+            - name: CREDIT_R2DBC_URL
+              value: "r2dbc:postgresql://credit-postgres:5432/credits_db"
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka:9092"
+            - name: CUSTOMER_API_BASE_URL
+              value: "http://api-gateway:8080"
+            - name: AUTH_API_BASE_URL
+              value: "http://api-gateway:8080"
+          volumeMounts:
+            - name: approle
+              mountPath: /run/approle
+              readOnly: true
+          # The service is up when it listens: a slow start gets five minutes before the pod is
+          # restarted, and traffic only arrives while the port answers.
+          startupProbe:
+            tcpSocket:
+              port: 8083
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket:
+              port: 8083
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 300Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+      volumes:
+        # Where the dev Vault of infra leaves the AppRole of every service. The secrets
+        # themselves are not here: the service reads them from Vault with this login.
+        - name: approle
+          persistentVolumeClaim:
+            claimName: vault-approle
+            readOnly: true
