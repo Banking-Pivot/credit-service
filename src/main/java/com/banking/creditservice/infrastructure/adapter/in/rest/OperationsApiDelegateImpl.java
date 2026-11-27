@@ -5,7 +5,7 @@ import com.banking.creditservice.application.command.PayCreditCommand;
 import com.banking.creditservice.application.model.OperationResult;
 import com.banking.creditservice.application.port.in.ChargeCreditUseCase;
 import com.banking.creditservice.application.port.in.PayCreditUseCase;
-import com.banking.creditservice.domain.model.CurrencyCode;
+import com.banking.creditservice.domain.model.enums.CurrencyCode;
 import com.banking.creditservice.infrastructure.adapter.in.rest.generated.api.OperationsApiDelegate;
 import com.banking.creditservice.infrastructure.adapter.in.rest.generated.model.ChargeRequest;
 import com.banking.creditservice.infrastructure.adapter.in.rest.generated.model.OperationResponse;

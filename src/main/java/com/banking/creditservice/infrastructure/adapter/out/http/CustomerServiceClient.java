@@ -2,7 +2,7 @@ package com.banking.creditservice.infrastructure.adapter.out.http;
 
 import com.banking.creditservice.application.model.CustomerSnapshot;
 import com.banking.creditservice.application.port.out.CustomerDirectoryPort;
-import com.banking.creditservice.domain.model.CustomerType;
+import com.banking.creditservice.domain.model.enums.CustomerType;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Qualifier;

@@ -1,7 +1,9 @@
-package com.banking.creditservice.domain.model;
+package com.banking.creditservice.domain.model.vo;
 
 import com.banking.creditservice.domain.exception.CreditRuleViolationException;
 import com.banking.creditservice.domain.exception.RuleViolation;
+import com.banking.creditservice.domain.model.Amounts;
+import com.banking.creditservice.domain.model.enums.CreditType;
 import java.math.BigDecimal;
 
 /**
@@ -39,7 +41,8 @@ public record CreditTerms(BigDecimal principal, BigDecimal creditLimit, int paym
     return new CreditTerms(null, Amounts.positive(creditLimit), day);
   }
 
-  static int requireDueDay(Integer paymentDueDay) {
+  /** Returns the payment due day when it is a valid day of the month, or refuses it. */
+  public static int requireDueDay(Integer paymentDueDay) {
     if (paymentDueDay == null || paymentDueDay < FIRST_DUE_DAY || paymentDueDay > LAST_DUE_DAY) {
       throw invalid(
           "paymentDueDay must be between " + FIRST_DUE_DAY + " and " + LAST_DUE_DAY + ".");
@@ -47,7 +50,8 @@ public record CreditTerms(BigDecimal principal, BigDecimal creditLimit, int paym
     return paymentDueDay;
   }
 
-  static CreditRuleViolationException invalid(String message) {
+  /** The error for terms that break a rule of the credit. */
+  public static CreditRuleViolationException invalid(String message) {
     return new CreditRuleViolationException(RuleViolation.INVALID_PRODUCT_TERMS, message);
   }
 }

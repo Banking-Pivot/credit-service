@@ -1,4 +1,4 @@
-package com.banking.creditservice.domain.model;
+package com.banking.creditservice.domain.model.enums;
 
 import java.math.BigDecimal;
 

@@ -3,12 +3,12 @@ package com.banking.creditservice.application.model;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.banking.creditservice.domain.model.Credit;
-import com.banking.creditservice.domain.model.CreditApplicant;
-import com.banking.creditservice.domain.model.CreditTerms;
-import com.banking.creditservice.domain.model.CreditType;
-import com.banking.creditservice.domain.model.CurrencyCode;
-import com.banking.creditservice.domain.model.CustomerType;
-import com.banking.creditservice.domain.model.PostingContext;
+import com.banking.creditservice.domain.model.enums.CreditType;
+import com.banking.creditservice.domain.model.enums.CurrencyCode;
+import com.banking.creditservice.domain.model.enums.CustomerType;
+import com.banking.creditservice.domain.model.vo.CreditApplicant;
+import com.banking.creditservice.domain.model.vo.CreditTerms;
+import com.banking.creditservice.domain.model.vo.PostingContext;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;

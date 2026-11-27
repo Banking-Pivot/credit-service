@@ -1,8 +1,8 @@
 package com.banking.creditservice.infrastructure.adapter.out.postgres;
 
-import com.banking.creditservice.domain.model.CurrencyCode;
 import com.banking.creditservice.domain.model.Movement;
-import com.banking.creditservice.domain.model.MovementType;
+import com.banking.creditservice.domain.model.enums.CurrencyCode;
+import com.banking.creditservice.domain.model.enums.MovementType;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;

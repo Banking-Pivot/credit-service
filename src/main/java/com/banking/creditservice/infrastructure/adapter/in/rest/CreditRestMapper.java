@@ -53,8 +53,9 @@ public class CreditRestMapper {
   public OpenCreditCommand toCommand(OpenCreditRequest request) {
     return new OpenCreditCommand(
         request.getCustomerId(),
-        convert(request.getType(), com.banking.creditservice.domain.model.CreditType.class),
-        convert(request.getCurrency(), com.banking.creditservice.domain.model.CurrencyCode.class),
+        convert(request.getType(), com.banking.creditservice.domain.model.enums.CreditType.class),
+        convert(
+            request.getCurrency(), com.banking.creditservice.domain.model.enums.CurrencyCode.class),
         request.getPrincipal(),
         request.getCreditLimit(),
         request.getPaymentDueDay());
@@ -80,8 +81,8 @@ public class CreditRestMapper {
     return new ListCreditsQuery(
         PageRequest.of(page, size),
         customerId,
-        convert(type, com.banking.creditservice.domain.model.CreditType.class),
-        convert(status, com.banking.creditservice.domain.model.CreditStatus.class),
+        convert(type, com.banking.creditservice.domain.model.enums.CreditType.class),
+        convert(status, com.banking.creditservice.domain.model.enums.CreditStatus.class),
         overdue);
   }
 

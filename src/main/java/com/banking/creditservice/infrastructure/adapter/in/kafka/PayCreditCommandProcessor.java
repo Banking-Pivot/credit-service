@@ -2,7 +2,7 @@ package com.banking.creditservice.infrastructure.adapter.in.kafka;
 
 import com.banking.creditservice.application.command.PayCreditCommand;
 import com.banking.creditservice.application.port.in.PayCreditUseCase;
-import com.banking.creditservice.domain.model.CurrencyCode;
+import com.banking.creditservice.domain.model.enums.CurrencyCode;
 import com.banking.creditservice.infrastructure.adapter.in.BusinessFailure;
 import java.util.Optional;
 import java.util.UUID;

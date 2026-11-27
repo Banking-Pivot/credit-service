@@ -1,4 +1,4 @@
-package com.banking.creditservice.domain.model;
+package com.banking.creditservice.domain.model.enums;
 
 /** Currencies a credit product can use. */
 public enum CurrencyCode {

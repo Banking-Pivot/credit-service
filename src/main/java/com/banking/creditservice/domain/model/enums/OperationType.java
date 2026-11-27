@@ -1,4 +1,4 @@
-package com.banking.creditservice.domain.model;
+package com.banking.creditservice.domain.model.enums;
 
 /** Monetary operations a client requests with an operationId. */
 public enum OperationType {

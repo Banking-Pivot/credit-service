@@ -1,8 +1,8 @@
 package com.banking.creditservice.application.model;
 
 import com.banking.creditservice.domain.model.Amounts;
-import com.banking.creditservice.domain.model.CurrencyCode;
-import com.banking.creditservice.domain.model.OperationType;
+import com.banking.creditservice.domain.model.enums.CurrencyCode;
+import com.banking.creditservice.domain.model.enums.OperationType;
 import java.math.BigDecimal;
 import java.util.Objects;
 import java.util.UUID;

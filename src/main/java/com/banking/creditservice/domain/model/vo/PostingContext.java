@@ -1,4 +1,4 @@
-package com.banking.creditservice.domain.model;
+package com.banking.creditservice.domain.model.vo;
 
 import java.time.Instant;
 import java.time.LocalDate;

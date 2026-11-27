@@ -1,7 +1,7 @@
 package com.banking.creditservice.application.query;
 
-import com.banking.creditservice.domain.model.CreditStatus;
-import com.banking.creditservice.domain.model.CreditType;
+import com.banking.creditservice.domain.model.enums.CreditStatus;
+import com.banking.creditservice.domain.model.enums.CreditType;
 import java.util.Objects;
 import java.util.UUID;
 

@@ -5,9 +5,9 @@ import static org.springframework.data.relational.core.query.Query.query;
 
 import com.banking.creditservice.application.port.out.ProductReportPort;
 import com.banking.creditservice.domain.model.Amounts;
-import com.banking.creditservice.domain.model.CreditType;
-import com.banking.creditservice.domain.model.CurrencyCode;
-import com.banking.creditservice.domain.model.MovementType;
+import com.banking.creditservice.domain.model.enums.CreditType;
+import com.banking.creditservice.domain.model.enums.CurrencyCode;
+import com.banking.creditservice.domain.model.enums.MovementType;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Collection;

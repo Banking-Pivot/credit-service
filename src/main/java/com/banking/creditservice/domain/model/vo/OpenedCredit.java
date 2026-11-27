@@ -1,5 +1,7 @@
-package com.banking.creditservice.domain.model;
+package com.banking.creditservice.domain.model.vo;
 
+import com.banking.creditservice.domain.model.Credit;
+import com.banking.creditservice.domain.model.Movement;
 import java.util.Objects;
 import java.util.Optional;
 

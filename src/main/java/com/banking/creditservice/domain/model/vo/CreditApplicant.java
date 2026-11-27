@@ -1,5 +1,6 @@
-package com.banking.creditservice.domain.model;
+package com.banking.creditservice.domain.model.vo;
 
+import com.banking.creditservice.domain.model.enums.CustomerType;
 import java.util.Objects;
 import java.util.UUID;
 

@@ -1,10 +1,10 @@
 package com.banking.creditservice.application.model;
 
 import com.banking.creditservice.domain.model.Credit;
-import com.banking.creditservice.domain.model.CreditStatus;
-import com.banking.creditservice.domain.model.CreditType;
-import com.banking.creditservice.domain.model.CurrencyCode;
-import com.banking.creditservice.domain.model.CustomerType;
+import com.banking.creditservice.domain.model.enums.CreditStatus;
+import com.banking.creditservice.domain.model.enums.CreditType;
+import com.banking.creditservice.domain.model.enums.CurrencyCode;
+import com.banking.creditservice.domain.model.enums.CustomerType;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;

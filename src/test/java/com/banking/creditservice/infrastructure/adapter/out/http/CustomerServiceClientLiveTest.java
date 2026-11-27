@@ -3,7 +3,7 @@ package com.banking.creditservice.infrastructure.adapter.out.http;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.banking.creditservice.application.model.CustomerSnapshot;
-import com.banking.creditservice.domain.model.CustomerType;
+import com.banking.creditservice.domain.model.enums.CustomerType;
 import com.banking.creditservice.infrastructure.config.ClientsProperties;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.timelimiter.TimeLimiterRegistry;

@@ -1,7 +1,7 @@
 package com.banking.creditservice.application.model;
 
-import com.banking.creditservice.domain.model.CreditApplicant;
-import com.banking.creditservice.domain.model.CustomerType;
+import com.banking.creditservice.domain.model.enums.CustomerType;
+import com.banking.creditservice.domain.model.vo.CreditApplicant;
 import java.util.Objects;
 import java.util.UUID;
 

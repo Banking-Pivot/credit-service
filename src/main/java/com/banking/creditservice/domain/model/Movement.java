@@ -1,5 +1,7 @@
 package com.banking.creditservice.domain.model;
 
+import com.banking.creditservice.domain.model.enums.CurrencyCode;
+import com.banking.creditservice.domain.model.enums.MovementType;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Objects;

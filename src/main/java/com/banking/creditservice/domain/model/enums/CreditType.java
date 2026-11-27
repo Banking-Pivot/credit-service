@@ -1,4 +1,4 @@
-package com.banking.creditservice.domain.model;
+package com.banking.creditservice.domain.model.enums;
 
 /**
  * Credit products and the customers that can hold them.

@@ -1,7 +1,7 @@
 package com.banking.creditservice.application.command;
 
-import com.banking.creditservice.domain.model.CreditType;
-import com.banking.creditservice.domain.model.CurrencyCode;
+import com.banking.creditservice.domain.model.enums.CreditType;
+import com.banking.creditservice.domain.model.enums.CurrencyCode;
 import java.math.BigDecimal;
 import java.util.Objects;
 import java.util.UUID;
