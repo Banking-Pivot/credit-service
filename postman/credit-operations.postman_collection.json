@@ -1,9 +1,45 @@
 {
   "info": {
     "name": "credit-service - reglas de negocio de créditos",
-    "description": "Reglas de negocio de credit-service, una carpeta por regla: producto según el tipo de cliente (un préstamo personal activo por persona, préstamos empresariales sin tope), condiciones del producto, consumos de tarjeta hasta el límite, pagos idempotentes, límite y día de pago, cierre con deuda cero, movimientos y reportes. Todo va por el API Gateway (perfil dev, puerto 8080), que necesita discovery-server, customer-service y credit-service arriba; ajusta baseUrl si corre en otra dirección. Corre la colección completa y en orden: cada carpeta usa los clientes y productos de las anteriores. Cada corrida crea clientes, productos y operationId nuevos, así que se puede repetir sobre la misma base.",
+    "description": "Reglas de negocio de credit-service, una carpeta por regla: producto según el tipo de cliente (un préstamo personal activo por persona, préstamos empresariales sin tope), condiciones del producto, consumos de tarjeta hasta el límite, pagos idempotentes, límite y día de pago, cierre con deuda cero, movimientos y reportes. Todo va por el API Gateway (perfil dev, puerto 8080), que necesita discovery-server, auth-service, customer-service y credit-service arriba; ajusta baseUrl si corre en otra dirección. El Gateway pide un token: la colección inicia sesión sola con las variables username y password (el usuario admin del perfil dev) antes de la primera petición y cuando el token está por vencer, y lo envía como Bearer en todas. Corre la colección completa y en orden: cada carpeta usa los clientes y productos de las anteriores. Cada corrida crea clientes, productos y operationId nuevos, así que se puede repetir sobre la misma base. Las carpetas 9 y 10 muestran la fecha de vencimiento y la deuda vencida: la 9 corre siempre; la 10 necesita el reloj de credit-service adelantado (CREDIT_CLOCK_OFFSET) y la variable clockOffsetActive en true, y si no se salta sola.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "const expiresAt = Number(pm.collectionVariables.get('accessTokenExpiresAt') || 0);",
+          "if (!pm.collectionVariables.get('accessToken') || Date.now() > expiresAt) {",
+          "  pm.sendRequest({",
+          "    url: pm.collectionVariables.get('baseUrl') + '/api/v1/auth/login',",
+          "    method: 'POST',",
+          "    header: { 'Content-Type': 'application/json' },",
+          "    body: { mode: 'raw', raw: JSON.stringify({",
+          "      username: pm.collectionVariables.get('username'),",
+          "      password: pm.collectionVariables.get('password') }) }",
+          "  }, (error, response) => {",
+          "    if (error || response.code !== 200) { throw new Error('No se pudo iniciar sesión'); }",
+          "    const body = response.json();",
+          "    pm.collectionVariables.set('accessToken', body.accessToken);",
+          "    pm.collectionVariables.set('accessTokenExpiresAt', Date.now() + (body.expiresIn - 60) * 1000);",
+          "  });",
+          "}"
+        ]
+      }
+    }
+  ],
   "item": [
     {
       "name": "1. Clientes (customer-service)",
@@ -48,7 +84,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/customers",
+            "url": "{{baseUrl}}/api/v1/customers",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"type\": \"PERSONAL\",\n  \"profile\": \"STANDARD\",\n  \"documentType\": \"DNI\",\n  \"documentNumber\": \"{{personalDocument}}\",\n  \"name\": \"Ana Perez\"\n}"
@@ -93,7 +129,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/customers",
+            "url": "{{baseUrl}}/api/v1/customers",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"type\": \"BUSINESS\",\n  \"profile\": \"STANDARD\",\n  \"documentType\": \"RUC\",\n  \"documentNumber\": \"{{businessDocument}}\",\n  \"name\": \"Inversiones del Sur SA\"\n}"
@@ -138,7 +174,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/customers",
+            "url": "{{baseUrl}}/api/v1/customers",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"type\": \"PERSONAL\",\n  \"profile\": \"STANDARD\",\n  \"documentType\": \"DNI\",\n  \"documentNumber\": \"{{inactiveDocument}}\",\n  \"name\": \"Diego Luna\"\n}"
@@ -166,7 +202,7 @@
                 "value": "\"0\""
               }
             ],
-            "url": "{{baseUrl}}/customers/{{inactiveId}}"
+            "url": "{{baseUrl}}/api/v1/customers/{{inactiveId}}"
           }
         }
       ]
@@ -190,7 +226,7 @@
                   "  pm.expect(body.currency).to.eql('PEN');",
                   "  pm.expect(body.status).to.eql('ACTIVE');",
                   "  pm.expect(body.outstandingDebt).to.eql(5000);",
-                  "  pm.expect(pm.response.headers.get('Location')).to.eql('/credits/' + body.id);",
+                  "  pm.expect(pm.response.headers.get('Location')).to.eql('/api/v1/credits/' + body.id);",
                   "  pm.expect(pm.response.headers.get('ETag')).to.eql('\"0\"');",
                   "  pm.expect(body.principal).to.eql(5000);",
                   "  pm.expect(body.customerType).to.eql('PERSONAL');",
@@ -208,7 +244,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits",
+            "url": "{{baseUrl}}/api/v1/credits",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"customerId\": \"{{personalId}}\",\n  \"type\": \"PERSONAL_LOAN\",\n  \"currency\": \"PEN\",\n  \"principal\": 5000,\n  \"paymentDueDay\": 5\n}"
@@ -239,7 +275,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits",
+            "url": "{{baseUrl}}/api/v1/credits",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"customerId\": \"{{personalId}}\",\n  \"type\": \"PERSONAL_LOAN\",\n  \"currency\": \"PEN\",\n  \"principal\": 1000,\n  \"paymentDueDay\": 5\n}"
@@ -270,7 +306,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits",
+            "url": "{{baseUrl}}/api/v1/credits",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"customerId\": \"{{personalId}}\",\n  \"type\": \"BUSINESS_LOAN\",\n  \"currency\": \"PEN\",\n  \"principal\": 1000,\n  \"paymentDueDay\": 15\n}"
@@ -301,7 +337,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits",
+            "url": "{{baseUrl}}/api/v1/credits",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"customerId\": \"{{businessId}}\",\n  \"type\": \"PERSONAL_LOAN\",\n  \"currency\": \"PEN\",\n  \"principal\": 1000,\n  \"paymentDueDay\": 15\n}"
@@ -323,7 +359,7 @@
                   "  pm.expect(body.currency).to.eql('PEN');",
                   "  pm.expect(body.status).to.eql('ACTIVE');",
                   "  pm.expect(body.outstandingDebt).to.eql(20000);",
-                  "  pm.expect(pm.response.headers.get('Location')).to.eql('/credits/' + body.id);",
+                  "  pm.expect(pm.response.headers.get('Location')).to.eql('/api/v1/credits/' + body.id);",
                   "  pm.expect(pm.response.headers.get('ETag')).to.eql('\"0\"');",
                   "});",
                   "pm.collectionVariables.set('businessLoanId', body.id);"
@@ -339,7 +375,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits",
+            "url": "{{baseUrl}}/api/v1/credits",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"customerId\": \"{{businessId}}\",\n  \"type\": \"BUSINESS_LOAN\",\n  \"currency\": \"PEN\",\n  \"principal\": 20000,\n  \"paymentDueDay\": 10\n}"
@@ -361,7 +397,7 @@
                   "  pm.expect(body.currency).to.eql('USD');",
                   "  pm.expect(body.status).to.eql('ACTIVE');",
                   "  pm.expect(body.outstandingDebt).to.eql(8000);",
-                  "  pm.expect(pm.response.headers.get('Location')).to.eql('/credits/' + body.id);",
+                  "  pm.expect(pm.response.headers.get('Location')).to.eql('/api/v1/credits/' + body.id);",
                   "  pm.expect(pm.response.headers.get('ETag')).to.eql('\"0\"');",
                   "});",
                   "pm.collectionVariables.set('businessLoanUsdId', body.id);"
@@ -377,7 +413,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits",
+            "url": "{{baseUrl}}/api/v1/credits",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"customerId\": \"{{businessId}}\",\n  \"type\": \"BUSINESS_LOAN\",\n  \"currency\": \"USD\",\n  \"principal\": 8000,\n  \"paymentDueDay\": 10\n}"
@@ -405,7 +441,7 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{baseUrl}}/credits?customerId={{businessId}}&type=BUSINESS_LOAN&status=ACTIVE"
+            "url": "{{baseUrl}}/api/v1/credits?customerId={{businessId}}&type=BUSINESS_LOAN&status=ACTIVE"
           }
         },
         {
@@ -431,7 +467,7 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{baseUrl}}/credits/{{personalLoanId}}/movements"
+            "url": "{{baseUrl}}/api/v1/credits/{{personalLoanId}}/movements"
           }
         },
         {
@@ -458,7 +494,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits",
+            "url": "{{baseUrl}}/api/v1/credits",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"customerId\": \"{{$guid}}\",\n  \"type\": \"CREDIT_CARD\",\n  \"currency\": \"PEN\",\n  \"creditLimit\": 1000,\n  \"paymentDueDay\": 15\n}"
@@ -489,7 +525,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits",
+            "url": "{{baseUrl}}/api/v1/credits",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"customerId\": \"{{inactiveId}}\",\n  \"type\": \"CREDIT_CARD\",\n  \"currency\": \"PEN\",\n  \"creditLimit\": 1000,\n  \"paymentDueDay\": 15\n}"
@@ -526,7 +562,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits",
+            "url": "{{baseUrl}}/api/v1/credits",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"customerId\": \"{{businessId}}\",\n  \"type\": \"BUSINESS_LOAN\",\n  \"currency\": \"PEN\",\n  \"principal\": 1000,\n  \"creditLimit\": 1000,\n  \"paymentDueDay\": 15\n}"
@@ -557,7 +593,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits",
+            "url": "{{baseUrl}}/api/v1/credits",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"customerId\": \"{{businessId}}\",\n  \"type\": \"CREDIT_CARD\",\n  \"currency\": \"PEN\",\n  \"paymentDueDay\": 15\n}"
@@ -588,7 +624,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits",
+            "url": "{{baseUrl}}/api/v1/credits",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"customerId\": \"{{businessId}}\",\n  \"type\": \"CREDIT_CARD\",\n  \"currency\": \"PEN\",\n  \"principal\": 500,\n  \"creditLimit\": 1000,\n  \"paymentDueDay\": 15\n}"
@@ -619,7 +655,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits",
+            "url": "{{baseUrl}}/api/v1/credits",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"customerId\": \"{{businessId}}\",\n  \"type\": \"CREDIT_CARD\",\n  \"currency\": \"PEN\",\n  \"creditLimit\": 1000,\n  \"paymentDueDay\": 29\n}"
@@ -650,7 +686,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits",
+            "url": "{{baseUrl}}/api/v1/credits",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"customerId\": \"{{businessId}}\",\n  \"type\": \"BUSINESS_LOAN\",\n  \"currency\": \"PEN\",\n  \"principal\": 1000.555,\n  \"paymentDueDay\": 15\n}"
@@ -678,7 +714,7 @@
                   "  pm.expect(body.currency).to.eql('PEN');",
                   "  pm.expect(body.status).to.eql('ACTIVE');",
                   "  pm.expect(body.outstandingDebt).to.eql(0);",
-                  "  pm.expect(pm.response.headers.get('Location')).to.eql('/credits/' + body.id);",
+                  "  pm.expect(pm.response.headers.get('Location')).to.eql('/api/v1/credits/' + body.id);",
                   "  pm.expect(pm.response.headers.get('ETag')).to.eql('\"0\"');",
                   "  pm.expect(body.creditLimit).to.eql(1000);",
                   "  pm.expect(body.availableCredit).to.eql(1000);",
@@ -696,7 +732,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits",
+            "url": "{{baseUrl}}/api/v1/credits",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"customerId\": \"{{personalId}}\",\n  \"type\": \"CREDIT_CARD\",\n  \"currency\": \"PEN\",\n  \"creditLimit\": 1000,\n  \"paymentDueDay\": 15\n}"
@@ -718,7 +754,7 @@
                   "  pm.expect(body.currency).to.eql('PEN');",
                   "  pm.expect(body.status).to.eql('ACTIVE');",
                   "  pm.expect(body.outstandingDebt).to.eql(0);",
-                  "  pm.expect(pm.response.headers.get('Location')).to.eql('/credits/' + body.id);",
+                  "  pm.expect(pm.response.headers.get('Location')).to.eql('/api/v1/credits/' + body.id);",
                   "  pm.expect(pm.response.headers.get('ETag')).to.eql('\"0\"');",
                   "  pm.expect(body.customerType).to.eql('BUSINESS');",
                   "});",
@@ -735,7 +771,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits",
+            "url": "{{baseUrl}}/api/v1/credits",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"customerId\": \"{{businessId}}\",\n  \"type\": \"CREDIT_CARD\",\n  \"currency\": \"PEN\",\n  \"creditLimit\": 3000,\n  \"paymentDueDay\": 20\n}"
@@ -778,7 +814,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{cardId}}/charges",
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}/charges",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 300,\n  \"currency\": \"PEN\",\n  \"description\": \"Supermercado\"\n}"
@@ -818,7 +854,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{cardId}}/charges",
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}/charges",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 800,\n  \"currency\": \"PEN\"\n}"
@@ -860,7 +896,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{cardId}}/charges",
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}/charges",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 700,\n  \"currency\": \"PEN\",\n  \"description\": \"Pasajes\"\n}"
@@ -900,7 +936,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{cardId}}/charges",
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}/charges",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 0.01,\n  \"currency\": \"PEN\"\n}"
@@ -940,7 +976,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{cardId}}/charges",
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}/charges",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 10,\n  \"currency\": \"USD\"\n}"
@@ -980,7 +1016,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{personalLoanId}}/charges",
+            "url": "{{baseUrl}}/api/v1/credits/{{personalLoanId}}/charges",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 10,\n  \"currency\": \"PEN\"\n}"
@@ -1009,7 +1045,7 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{baseUrl}}/credits/{{cardId}}/available-balance"
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}/available-balance"
           }
         },
         {
@@ -1031,7 +1067,7 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{baseUrl}}/credits/{{personalLoanId}}/available-balance"
+            "url": "{{baseUrl}}/api/v1/credits/{{personalLoanId}}/available-balance"
           }
         }
       ]
@@ -1073,7 +1109,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{cardId}}/payments",
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}/payments",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 1500,\n  \"currency\": \"PEN\"\n}"
@@ -1117,7 +1153,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{cardId}}/payments",
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}/payments",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"operationId\": \"{{paymentOperationId}}\",\n  \"amount\": 400,\n  \"currency\": \"PEN\"\n}"
@@ -1149,7 +1185,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{cardId}}/payments",
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}/payments",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"operationId\": \"{{paymentOperationId}}\",\n  \"amount\": 400,\n  \"currency\": \"PEN\"\n}"
@@ -1180,7 +1216,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{cardId}}/payments",
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}/payments",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"operationId\": \"{{paymentOperationId}}\",\n  \"amount\": 50,\n  \"currency\": \"PEN\"\n}"
@@ -1211,7 +1247,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{personalLoanId}}/payments",
+            "url": "{{baseUrl}}/api/v1/credits/{{personalLoanId}}/payments",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"operationId\": \"{{paymentOperationId}}\",\n  \"amount\": 400,\n  \"currency\": \"PEN\"\n}"
@@ -1238,7 +1274,7 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{baseUrl}}/credits/{{cardId}}/debt"
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}/debt"
           }
         },
         {
@@ -1276,7 +1312,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{personalLoanId}}/payments",
+            "url": "{{baseUrl}}/api/v1/credits/{{personalLoanId}}/payments",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 1000,\n  \"currency\": \"PEN\"\n}"
@@ -1304,7 +1340,7 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{baseUrl}}/credits/{{personalLoanId}}/debt"
+            "url": "{{baseUrl}}/api/v1/credits/{{personalLoanId}}/debt"
           }
         },
         {
@@ -1340,7 +1376,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{personalLoanId}}/payments",
+            "url": "{{baseUrl}}/api/v1/credits/{{personalLoanId}}/payments",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 10,\n  \"currency\": \"USD\"\n}"
@@ -1370,7 +1406,7 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{baseUrl}}/credits/{{cardId}}"
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}"
           }
         },
         {
@@ -1397,7 +1433,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{cardId}}",
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"paymentDueDay\": 20,\n  \"creditLimit\": 2000\n}"
@@ -1432,7 +1468,7 @@
                 "value": "{{creditEtag}}"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{cardId}}",
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"paymentDueDay\": 15,\n  \"creditLimit\": 500\n}"
@@ -1467,7 +1503,7 @@
                 "value": "{{creditEtag}}"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{cardId}}",
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"paymentDueDay\": 15\n}"
@@ -1507,7 +1543,7 @@
                 "value": "{{creditEtag}}"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{cardId}}",
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"paymentDueDay\": 20,\n  \"creditLimit\": 2000\n}"
@@ -1542,7 +1578,7 @@
                 "value": "{{creditEtag}}"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{cardId}}",
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"paymentDueDay\": 25,\n  \"creditLimit\": 3000\n}"
@@ -1566,7 +1602,7 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{baseUrl}}/credits/{{personalLoanId}}"
+            "url": "{{baseUrl}}/api/v1/credits/{{personalLoanId}}"
           }
         },
         {
@@ -1597,7 +1633,7 @@
                 "value": "{{creditEtag}}"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{personalLoanId}}",
+            "url": "{{baseUrl}}/api/v1/credits/{{personalLoanId}}",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"paymentDueDay\": 10,\n  \"creditLimit\": 1000\n}"
@@ -1634,7 +1670,7 @@
                 "value": "{{creditEtag}}"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{personalLoanId}}",
+            "url": "{{baseUrl}}/api/v1/credits/{{personalLoanId}}",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"paymentDueDay\": 10\n}"
@@ -1664,7 +1700,7 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{baseUrl}}/credits/{{cardId}}"
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}"
           }
         },
         {
@@ -1691,7 +1727,7 @@
                 "value": "{{creditEtag}}"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{cardId}}"
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}"
           }
         },
         {
@@ -1729,7 +1765,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{cardId}}/payments",
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}/payments",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 600,\n  \"currency\": \"PEN\"\n}"
@@ -1753,7 +1789,7 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{baseUrl}}/credits/{{cardId}}"
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}"
           }
         },
         {
@@ -1777,7 +1813,7 @@
                 "value": "{{creditEtag}}"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{cardId}}"
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}"
           }
         },
         {
@@ -1801,7 +1837,7 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{baseUrl}}/credits/{{cardId}}"
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}"
           }
         },
         {
@@ -1825,7 +1861,7 @@
                 "value": "{{creditEtag}}"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{cardId}}"
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}"
           }
         },
         {
@@ -1861,7 +1897,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{cardId}}/charges",
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}/charges",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 10,\n  \"currency\": \"PEN\"\n}"
@@ -1896,7 +1932,7 @@
                 "value": "{{creditEtag}}"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{cardId}}",
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"paymentDueDay\": 15,\n  \"creditLimit\": 2000\n}"
@@ -1924,7 +1960,7 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{baseUrl}}/credits/{{cardId}}/movements"
+            "url": "{{baseUrl}}/api/v1/credits/{{cardId}}/movements"
           }
         },
         {
@@ -1948,7 +1984,7 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{baseUrl}}/credits?customerId={{personalId}}&type=CREDIT_CARD&status=ACTIVE&size=1"
+            "url": "{{baseUrl}}/api/v1/credits?customerId={{personalId}}&type=CREDIT_CARD&status=ACTIVE&size=1"
           }
         },
         {
@@ -1985,7 +2021,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{personalLoanId}}/payments",
+            "url": "{{baseUrl}}/api/v1/credits/{{personalLoanId}}/payments",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 4000,\n  \"currency\": \"PEN\"\n}"
@@ -2009,7 +2045,7 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{baseUrl}}/credits/{{personalLoanId}}"
+            "url": "{{baseUrl}}/api/v1/credits/{{personalLoanId}}"
           }
         },
         {
@@ -2033,7 +2069,7 @@
                 "value": "{{creditEtag}}"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{personalLoanId}}"
+            "url": "{{baseUrl}}/api/v1/credits/{{personalLoanId}}"
           }
         },
         {
@@ -2051,7 +2087,7 @@
                   "  pm.expect(body.currency).to.eql('PEN');",
                   "  pm.expect(body.status).to.eql('ACTIVE');",
                   "  pm.expect(body.outstandingDebt).to.eql(3000);",
-                  "  pm.expect(pm.response.headers.get('Location')).to.eql('/credits/' + body.id);",
+                  "  pm.expect(pm.response.headers.get('Location')).to.eql('/api/v1/credits/' + body.id);",
                   "  pm.expect(pm.response.headers.get('ETag')).to.eql('\"0\"');",
                   "});",
                   "pm.collectionVariables.set('secondPersonalLoanId', body.id);",
@@ -2069,7 +2105,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits",
+            "url": "{{baseUrl}}/api/v1/credits",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"customerId\": \"{{personalId}}\",\n  \"type\": \"PERSONAL_LOAN\",\n  \"currency\": \"PEN\",\n  \"principal\": 3000,\n  \"paymentDueDay\": 5\n}"
@@ -2124,7 +2160,7 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/credits/{{businessCardId}}/charges",
+            "url": "{{baseUrl}}/api/v1/credits/{{businessCardId}}/charges",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 10,\n  \"currency\": \"PEN\"\n}"
@@ -2152,7 +2188,7 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{baseUrl}}/credits/{{businessCardId}}/movements/latest"
+            "url": "{{baseUrl}}/api/v1/credits/{{businessCardId}}/movements/latest"
           }
         },
         {
@@ -2175,7 +2211,7 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{baseUrl}}/credits/{{businessCardId}}/movements?size=100"
+            "url": "{{baseUrl}}/api/v1/credits/{{businessCardId}}/movements?size=100"
           }
         },
         {
@@ -2197,7 +2233,7 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{baseUrl}}/credits/{{businessLoanId}}/movements/latest"
+            "url": "{{baseUrl}}/api/v1/credits/{{businessLoanId}}/movements/latest"
           }
         },
         {
@@ -2232,7 +2268,7 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{baseUrl}}/credits/reports/products?from={{businessDate}}&to={{businessDate}}"
+            "url": "{{baseUrl}}/api/v1/credits/reports/products?from={{businessDate}}&to={{businessDate}}"
           }
         },
         {
@@ -2254,7 +2290,7 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{baseUrl}}/credits/reports/products?from=2024-01-01&to=2025-12-31"
+            "url": "{{baseUrl}}/api/v1/credits/reports/products?from=2024-01-01&to=2025-12-31"
           }
         },
         {
@@ -2276,7 +2312,939 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{baseUrl}}/credits/{{$guid}}"
+            "url": "{{baseUrl}}/api/v1/credits/{{$guid}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "9. Fecha de vencimiento y deuda vencida",
+      "description": "Cada producto con deuda tiene dueDate: el próximo día de pago después del día en que apareció la deuda (el desembolso de un préstamo, el primer consumo de una tarjeta). Un pago que deja la deuda en cero lo borra. Un pago que deja deuda y llega al mínimo (5 % de la deuda antes del pago) lo pasa al mes siguiente, una sola vez por ciclo; uno menor solo baja la deuda. overdue se calcula al leer: hay deuda y hoy es posterior a dueDate. GET /api/v1/credits acepta overdue=true|false, combinable con customerId, type y status. La tarjeta de esta carpeta queda con deuda y sin pagar: es la que entra en mora en la carpeta 10.",
+      "item": [
+        {
+          "name": "70 Crear cliente PERSONAL para las fechas de vencimiento",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Documento nuevo en cada corrida: customer-service no admite documentos repetidos.",
+                  "pm.collectionVariables.set('dueDocument', String(Math.floor(10000000 + Math.random() * 90000000)));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('Cliente PERSONAL ACTIVE', () => {",
+                  "  pm.expect(body.type).to.eql('PERSONAL');",
+                  "  pm.expect(body.status).to.eql('ACTIVE');",
+                  "});",
+                  "pm.collectionVariables.set('dueCustomerId', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/customers",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"PERSONAL\",\n  \"profile\": \"STANDARD\",\n  \"documentType\": \"DNI\",\n  \"documentNumber\": \"{{dueDocument}}\",\n  \"name\": \"Luis Ramos\"\n}"
+            }
+          }
+        },
+        {
+          "name": "71 Tarjeta nueva: sin deuda no hay fecha de vencimiento",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('Sin dueDate y overdue false', () => {",
+                  "  pm.expect(body.outstandingDebt).to.eql(0);",
+                  "  pm.expect(body).to.not.have.property('dueDate');",
+                  "  pm.expect(body.overdue).to.eql(false);",
+                  "});",
+                  "pm.collectionVariables.set('dueCardId', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/credits",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{dueCustomerId}}\",\n  \"type\": \"CREDIT_CARD\",\n  \"currency\": \"PEN\",\n  \"creditLimit\": 1000,\n  \"paymentDueDay\": 15\n}"
+            }
+          }
+        },
+        {
+          "name": "72 Primer consumo de 200",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('operationId', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.test('CHARGE: deuda 200', () => {",
+                  "  pm.expect(pm.response.json().outstandingDebtAfter).to.eql(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/credits/{{dueCardId}}/charges",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 200,\n  \"currency\": \"PEN\",\n  \"description\": \"Primer consumo\"\n}"
+            }
+          }
+        },
+        {
+          "name": "73 La tarjeta ya tiene fecha de vencimiento",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('dueDate es un día 15 y la tarjeta está al día', () => {",
+                  "  pm.expect(body.dueDate).to.match(/^\\d{4}-\\d{2}-15$/);",
+                  "  pm.expect(body.overdue).to.eql(false);",
+                  "});",
+                  "if (!(pm.collectionVariables.get('clockOffsetActive') === 'true')) {",
+                  "  // Sin reloj adelantado, el vencimiento es posterior a hoy (America/Lima, UTC-5).",
+                  "  pm.test('dueDate posterior a hoy', () => {",
+                  "    const today = new Date(Date.now() - 5 * 3600 * 1000).toISOString().slice(0, 10);",
+                  "    pm.expect(body.dueDate > today).to.eql(true);",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/credits/{{dueCardId}}"
+          }
+        },
+        {
+          "name": "74 Préstamo personal de 1000: vence desde el desembolso",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('dueDate el próximo día 15 y overdue false', () => {",
+                  "  pm.expect(body.outstandingDebt).to.eql(1000);",
+                  "  pm.expect(body.dueDate).to.match(/^\\d{4}-\\d{2}-15$/);",
+                  "  pm.expect(body.overdue).to.eql(false);",
+                  "});",
+                  "pm.collectionVariables.set('dueLoanId', body.id);",
+                  "pm.collectionVariables.set('dueDate', body.dueDate);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/credits",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{dueCustomerId}}\",\n  \"type\": \"PERSONAL_LOAN\",\n  \"currency\": \"PEN\",\n  \"principal\": 1000,\n  \"paymentDueDay\": 15\n}"
+            }
+          }
+        },
+        {
+          "name": "75 Pagar 49.99, menos que el mínimo de 50",
+          "description": "El mínimo es el 5 % de la deuda antes del pago: 50 sobre 1000.",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('operationId', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.test('PAYMENT: deuda 950.01', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.type).to.eql('PAYMENT');",
+                  "  pm.expect(body.outstandingDebtAfter).to.eql(950.01);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/credits/{{dueLoanId}}/payments",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 49.99,\n  \"currency\": \"PEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "76 El vencimiento no cambia",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('Mismo dueDate', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.dueDate).to.eql(pm.collectionVariables.get('dueDate'));",
+                  "  pm.expect(body.overdue).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/credits/{{dueLoanId}}"
+          }
+        },
+        {
+          "name": "77 Pagar 50, más que el mínimo de 47.50",
+          "description": "El mínimo es el 5 % de 950.01: 47.50.",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('operationId', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.test('PAYMENT: deuda 900.01', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.type).to.eql('PAYMENT');",
+                  "  pm.expect(body.outstandingDebtAfter).to.eql(900.01);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/credits/{{dueLoanId}}/payments",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 50,\n  \"currency\": \"PEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "78 El vencimiento pasa al mes siguiente",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('dueDate un mes después', () => {",
+                  "  const [year, month] = pm.collectionVariables.get('dueDate').split('-').map(Number);",
+                  "  const next = month === 12 ? [year + 1, 1] : [year, month + 1];",
+                  "  pm.expect(body.dueDate).to.eql(next[0] + '-' + String(next[1]).padStart(2, '0') + '-15');",
+                  "  pm.expect(body.overdue).to.eql(false);",
+                  "});",
+                  "pm.collectionVariables.set('dueDate', body.dueDate);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/credits/{{dueLoanId}}"
+          }
+        },
+        {
+          "name": "79 Segundo pago del mismo ciclo, 100",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('operationId', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.test('PAYMENT: deuda 800.01', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.type).to.eql('PAYMENT');",
+                  "  pm.expect(body.outstandingDebtAfter).to.eql(800.01);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/credits/{{dueLoanId}}/payments",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 100,\n  \"currency\": \"PEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "80 El vencimiento no se mueve otra vez",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('Mismo dueDate que tras el primer pago del ciclo', () => {",
+                  "  pm.expect(pm.response.json().dueDate).to.eql(pm.collectionVariables.get('dueDate'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/credits/{{dueLoanId}}"
+          }
+        },
+        {
+          "name": "81 Pagar los 800.01 restantes",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('operationId', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.test('PAYMENT: deuda 0', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.type).to.eql('PAYMENT');",
+                  "  pm.expect(body.outstandingDebtAfter).to.eql(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/credits/{{dueLoanId}}/payments",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 800.01,\n  \"currency\": \"PEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "82 Sin deuda no hay fecha de vencimiento",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('Sin dueDate y overdue false', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.outstandingDebt).to.eql(0);",
+                  "  pm.expect(body).to.not.have.property('dueDate');",
+                  "  pm.expect(body.overdue).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/credits/{{dueLoanId}}"
+          }
+        },
+        {
+          "name": "83 Productos al día del cliente (overdue=false)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "if (!(pm.collectionVariables.get('clockOffsetActive') === 'true')) {",
+                  "  pm.test('La tarjeta y el préstamo, ninguno vencido', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.totalElements).to.eql(2);",
+                  "    pm.expect(body.items.every(item => item.overdue === false)).to.eql(true);",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/credits?customerId={{dueCustomerId}}&overdue=false"
+          }
+        },
+        {
+          "name": "84 Consulta de account-service: el cliente no tiene deuda vencida",
+          "description": "Es la consulta que hace account-service antes de abrir una cuenta: cualquier resultado impide abrirla (OVERDUE_DEBT).",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "if (!(pm.collectionVariables.get('clockOffsetActive') === 'true')) {",
+                  "  pm.test('totalElements 0', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.totalElements).to.eql(0);",
+                  "    pm.expect(body.items).to.eql([]);",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/credits?customerId={{dueCustomerId}}&overdue=true&size=1"
+          }
+        },
+        {
+          "name": "85 Filtro overdue que no es booleano (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 INVALID_REQUEST', () => {",
+                  "  pm.response.to.have.status(400);",
+                  "  pm.expect(pm.response.json().code).to.eql('INVALID_REQUEST');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/credits?overdue=quizas"
+          }
+        }
+      ]
+    },
+    {
+      "name": "10. Mora con el reloj adelantado (solo con clockOffsetActive=true)",
+      "description": "Los rechazos por deuda vencida solo se ven cuando pasa la fecha de vencimiento. Para no esperar un mes: 1) corre la carpeta 9 con credit-service normal; 2) reinicia credit-service con la variable de entorno CREDIT_CLOCK_OFFSET=40d (credit.clock-offset suma ese tiempo al reloj del servicio); 3) pon la variable de colección clockOffsetActive en true y corre esta carpeta. Con clockOffsetActive en otro valor todas las peticiones se saltan (pm.execution.skipRequest) y no comprueban nada. Al terminar, quita CREDIT_CLOCK_OFFSET, reinicia el servicio y devuelve clockOffsetActive a false.",
+      "item": [
+        {
+          "name": "86 Tarjetas en mora (overdue=true)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Solo corre con el reloj adelantado: CREDIT_CLOCK_OFFSET en credit-service y clockOffsetActive=true.",
+                  "if (!(pm.collectionVariables.get('clockOffsetActive') === 'true')) {",
+                  "  pm.execution.skipRequest();",
+                  "}",
+                  "// Prefiere la tarjeta que dejó con deuda la carpeta 9, si esa corrida sigue en las variables.",
+                  "const customerId = pm.collectionVariables.get('dueCustomerId');",
+                  "if (customerId) {",
+                  "  pm.request.url.query.add({ key: 'customerId', value: customerId });",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('clockOffsetActive') === 'true') {",
+                  "  pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "  const body = pm.response.json();",
+                  "  pm.test('Hay al menos una tarjeta vencida', () => {",
+                  "    pm.expect(body.totalElements).to.be.at.least(1);",
+                  "    pm.expect(body.items[0].overdue).to.eql(true);",
+                  "    pm.expect(body.items[0].outstandingDebt).to.be.above(0);",
+                  "  });",
+                  "  pm.collectionVariables.set('overdueCardId', body.items[0].id);",
+                  "  pm.collectionVariables.set('overdueCustomerId', body.items[0].customerId);",
+                  "  pm.collectionVariables.set('overdueCardDebt', String(body.items[0].outstandingDebt));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/credits?overdue=true&type=CREDIT_CARD&status=ACTIVE&size=1"
+          }
+        },
+        {
+          "name": "87 La tarjeta figura vencida",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Solo corre con el reloj adelantado: CREDIT_CLOCK_OFFSET en credit-service y clockOffsetActive=true.",
+                  "if (!(pm.collectionVariables.get('clockOffsetActive') === 'true')) {",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('clockOffsetActive') === 'true') {",
+                  "  pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "  pm.test('overdue true con su dueDate', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.overdue).to.eql(true);",
+                  "    pm.expect(body.dueDate).to.match(/^\\d{4}-\\d{2}-\\d{2}$/);",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/credits/{{overdueCardId}}"
+          }
+        },
+        {
+          "name": "88 Consulta de account-service: el cliente tiene deuda vencida",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Solo corre con el reloj adelantado: CREDIT_CLOCK_OFFSET en credit-service y clockOffsetActive=true.",
+                  "if (!(pm.collectionVariables.get('clockOffsetActive') === 'true')) {",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('clockOffsetActive') === 'true') {",
+                  "  pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "  pm.test('totalElements mayor que 0', () => {",
+                  "    pm.expect(pm.response.json().totalElements).to.be.at.least(1);",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/credits?customerId={{overdueCustomerId}}&overdue=true&size=1"
+          }
+        },
+        {
+          "name": "89 Abrir otro producto con deuda vencida (422)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Solo corre con el reloj adelantado: CREDIT_CLOCK_OFFSET en credit-service y clockOffsetActive=true.",
+                  "if (!(pm.collectionVariables.get('clockOffsetActive') === 'true')) {",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('clockOffsetActive') === 'true') {",
+                  "  pm.test('422 OVERDUE_DEBT', () => {",
+                  "    pm.response.to.have.status(422);",
+                  "    pm.expect(pm.response.json().code).to.eql('OVERDUE_DEBT');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/credits",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{overdueCustomerId}}\",\n  \"type\": \"CREDIT_CARD\",\n  \"currency\": \"PEN\",\n  \"creditLimit\": 500,\n  \"paymentDueDay\": 15\n}"
+            }
+          }
+        },
+        {
+          "name": "90 Consumir con la tarjeta en mora (422)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Solo corre con el reloj adelantado: CREDIT_CLOCK_OFFSET en credit-service y clockOffsetActive=true.",
+                  "if (!(pm.collectionVariables.get('clockOffsetActive') === 'true')) {",
+                  "  pm.execution.skipRequest();",
+                  "}",
+                  "pm.collectionVariables.set('operationId', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('clockOffsetActive') === 'true') {",
+                  "  pm.test('422 CREDIT_OVERDUE', () => {",
+                  "    pm.response.to.have.status(422);",
+                  "    pm.expect(pm.response.json().code).to.eql('CREDIT_OVERDUE');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/credits/{{overdueCardId}}/charges",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 1,\n  \"currency\": \"PEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "91 Pagar el mínimo de la tarjeta en mora",
+          "description": "El pago no dice quién paga: cualquiera puede pagar el producto de otro cliente, también cuando está en mora.",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Solo corre con el reloj adelantado: CREDIT_CLOCK_OFFSET en credit-service y clockOffsetActive=true.",
+                  "if (!(pm.collectionVariables.get('clockOffsetActive') === 'true')) {",
+                  "  pm.execution.skipRequest();",
+                  "}",
+                  "pm.collectionVariables.set('operationId', pm.variables.replaceIn('{{$guid}}'));",
+                  "// Un céntimo más que el 5 % de la deuda, sin pasar de la deuda.",
+                  "const debt = Number(pm.collectionVariables.get('overdueCardDebt'));",
+                  "const payment = Math.min(debt, Math.round(debt * 5) / 100 + 0.01);",
+                  "pm.collectionVariables.set('overduePayment', payment.toFixed(2));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('clockOffsetActive') === 'true') {",
+                  "  pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "  pm.test('PAYMENT aceptado', () => {",
+                  "    pm.expect(pm.response.json().type).to.eql('PAYMENT');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/credits/{{overdueCardId}}/payments",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": {{overduePayment}},\n  \"currency\": \"PEN\",\n  \"description\": \"Pago de un tercero\"\n}"
+            }
+          }
+        },
+        {
+          "name": "92 La tarjeta vuelve a estar al día",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Solo corre con el reloj adelantado: CREDIT_CLOCK_OFFSET en credit-service y clockOffsetActive=true.",
+                  "if (!(pm.collectionVariables.get('clockOffsetActive') === 'true')) {",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('clockOffsetActive') === 'true') {",
+                  "  pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "  pm.test('overdue false', () => {",
+                  "    pm.expect(pm.response.json().overdue).to.eql(false);",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/credits/{{overdueCardId}}"
+          }
+        },
+        {
+          "name": "93 La tarjeta al día acepta consumos otra vez",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Solo corre con el reloj adelantado: CREDIT_CLOCK_OFFSET en credit-service y clockOffsetActive=true.",
+                  "if (!(pm.collectionVariables.get('clockOffsetActive') === 'true')) {",
+                  "  pm.execution.skipRequest();",
+                  "}",
+                  "pm.collectionVariables.set('operationId', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('clockOffsetActive') === 'true') {",
+                  "  pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "  pm.test('CHARGE', () => {",
+                  "    pm.expect(pm.response.json().type).to.eql('CHARGE');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/credits/{{overdueCardId}}/charges",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationId\": \"{{operationId}}\",\n  \"amount\": 1,\n  \"currency\": \"PEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "94 El cliente al día abre otro producto",
+          "description": "Vale para el cliente de la carpeta 9, cuya única deuda vencida era la tarjeta.",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Solo corre con el reloj adelantado: CREDIT_CLOCK_OFFSET en credit-service y clockOffsetActive=true.",
+                  "if (!(pm.collectionVariables.get('clockOffsetActive') === 'true')) {",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('clockOffsetActive') === 'true') {",
+                  "  pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "  pm.test('Tarjeta nueva sin deuda vencida', () => {",
+                  "    pm.expect(pm.response.json().overdue).to.eql(false);",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/credits",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerId\": \"{{overdueCustomerId}}\",\n  \"type\": \"CREDIT_CARD\",\n  \"currency\": \"PEN\",\n  \"creditLimit\": 500,\n  \"paymentDueDay\": 15\n}"
+            }
           }
         }
       ]
@@ -2286,6 +3254,22 @@
     {
       "key": "baseUrl",
       "value": "http://localhost:8080"
+    },
+    {
+      "key": "username",
+      "value": "admin"
+    },
+    {
+      "key": "password",
+      "value": "Admin-dev-2026"
+    },
+    {
+      "key": "accessToken",
+      "value": ""
+    },
+    {
+      "key": "accessTokenExpiresAt",
+      "value": "0"
     },
     {
       "key": "businessDate",
@@ -2357,6 +3341,46 @@
     },
     {
       "key": "loopIndex",
+      "value": ""
+    },
+    {
+      "key": "clockOffsetActive",
+      "value": "false"
+    },
+    {
+      "key": "dueDocument",
+      "value": ""
+    },
+    {
+      "key": "dueCustomerId",
+      "value": ""
+    },
+    {
+      "key": "dueCardId",
+      "value": ""
+    },
+    {
+      "key": "dueLoanId",
+      "value": ""
+    },
+    {
+      "key": "dueDate",
+      "value": ""
+    },
+    {
+      "key": "overdueCardId",
+      "value": ""
+    },
+    {
+      "key": "overdueCustomerId",
+      "value": ""
+    },
+    {
+      "key": "overdueCardDebt",
+      "value": ""
+    },
+    {
+      "key": "overduePayment",
       "value": ""
     }
   ]

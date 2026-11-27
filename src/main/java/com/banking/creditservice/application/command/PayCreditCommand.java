@@ -1,0 +1,17 @@
+package com.banking.creditservice.application.command;
+
+import com.banking.creditservice.application.model.OperationRequest;
+import com.banking.creditservice.domain.model.CurrencyCode;
+import com.banking.creditservice.domain.model.OperationType;
+import java.math.BigDecimal;
+import java.util.UUID;
+
+/** Pays debt of a loan or card, once per operationId. */
+public record PayCreditCommand(
+    UUID operationId, UUID creditId, BigDecimal amount, CurrencyCode currency, String description) {
+
+  public OperationRequest toRequest() {
+    return new OperationRequest(
+        operationId, OperationType.PAYMENT, creditId, amount, currency, description);
+  }
+}

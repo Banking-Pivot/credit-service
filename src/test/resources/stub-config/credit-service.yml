@@ -3,6 +3,19 @@
 # The open circuit waits 60 s so it cannot half-open in the middle of a test.
 credit:
   business-zone: America/Lima
+  billing:
+    minimum-payment-rate: 0.05
+  # Many short retries: a test has three seconds to repair what it broke before the command
+  # is given up.
+  messaging:
+    retry-interval: 200ms
+    max-retries: 15
+    handling-timeout: 10s
+  # The client secret comes from Vault; the base URL is the stub's, added by the tests.
+  clients:
+    auth:
+      client-id: credit-service
+      refresh-margin: 60s
 clients:
   customer:
     timeout: 2s
@@ -12,6 +25,11 @@ clients:
       minimum-number-of-calls: 5
       wait-duration-in-open-state: 60s
       permitted-calls-in-half-open-state: 2
+    # Short waits so the tests of the retries stay fast; three attempts like the real settings.
+    retry:
+      max-attempts: 3
+      wait-duration: 50ms
+      backoff-multiplier: 2
 spring:
   r2dbc:
     pool:

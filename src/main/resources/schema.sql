@@ -3,8 +3,10 @@
 -- Spring Boot runs this script over R2DBC at every startup (spring.sql.init.mode: always in
 -- application.yaml). Every statement is IF NOT EXISTS: on an empty database it creates the
 -- schema, on a restart it leaves the existing tables and rows as they are. It does not change
--- a table that already exists: a new column or constraint needs its ALTER TABLE run by hand
--- on every existing credits_db.
+-- a table that already exists: a new constraint needs its ALTER TABLE run by hand on every
+-- existing credits_db. A column added after the first version has its own
+-- ALTER TABLE ... ADD COLUMN IF NOT EXISTS below the table, so an existing credits_db gets it
+-- at the next startup.
 --
 -- Money is NUMERIC(14, 2): twelve integer digits and two decimals, the largest principal,
 -- limit or operation amount the contract accepts. The debt never exceeds the principal or
@@ -25,6 +27,9 @@ CREATE TABLE IF NOT EXISTS credits (
     credit_limit     NUMERIC(14, 2),
     outstanding_debt NUMERIC(14, 2) NOT NULL,
     payment_due_day  INTEGER        NOT NULL,
+    -- Day the next payment is due, in the business zone; empty while nothing is owed. The
+    -- product is overdue when it still owes after this date: that is computed, never stored.
+    due_date         DATE,
     status           VARCHAR(20)    NOT NULL,
     opened_at        TIMESTAMPTZ    NOT NULL,
     updated_at       TIMESTAMPTZ    NOT NULL,
@@ -52,15 +57,23 @@ CREATE TABLE IF NOT EXISTS credits (
     CONSTRAINT ck_credits_version CHECK (version >= 0)
 );
 
+-- credits_db created before the due date existed. Its rows keep an empty due date and are
+-- not overdue; each gets its date with its next charge or qualifying payment.
+ALTER TABLE credits ADD COLUMN IF NOT EXISTS due_date DATE;
+
 -- A customer has at most one ACTIVE personal loan. The index decides when two openings
 -- race; closed loans do not count. Business loans and cards are not limited.
 CREATE UNIQUE INDEX IF NOT EXISTS uk_credits_personal_loan_active
     ON credits (customer_id)
     WHERE credit_type = 'PERSONAL_LOAN' AND status = 'ACTIVE';
 
--- GET /credits?customerId=&type=&status= ordered by opened_at, id: the call Account Service
+-- GET /api/v1/credits?customerId=&type=&status= ordered by opened_at, id: the call Account Service
 -- makes to find an active credit card, and its count.
 CREATE INDEX IF NOT EXISTS ix_credits_customer_filters ON credits (customer_id, credit_type, status, opened_at, id);
+
+-- Overdue products of a customer (debt after the due date): asked before opening a product
+-- and by Account Service with GET /api/v1/credits?customerId=&overdue=true.
+CREATE INDEX IF NOT EXISTS ix_credits_customer_due_date ON credits (customer_id, due_date);
 
 -- Product report: products opened before the end of the range.
 CREATE INDEX IF NOT EXISTS ix_credits_opened_at ON credits (opened_at);

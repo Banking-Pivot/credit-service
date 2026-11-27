@@ -4,8 +4,9 @@ spring:
 
   # Port, database URL, business zone and the customer-service URL with its timeout and
   # circuit breaker come from the Config Server: banking-config/credit-service.yml and
-  # credit-service-<profile>.yml. Secrets (the database user and password) come from Vault:
-  # secret/credit-service and secret/credit-service/<profile>. Where Eureka is comes from
+  # credit-service-<profile>.yml. Secrets (the database user and password, and the client
+  # secret of the service token) come from Vault: secret/credit-service and
+  # secret/credit-service/<profile>. Where Eureka is comes from
   # banking-config/application.yml: the service registers there as credit-service.
   config:
     import:
@@ -35,6 +36,34 @@ spring:
     init:
       mode: always
       schema-locations: classpath:schema.sql
+
+  # Kafka brings the payment commands of Transaction Service and takes the answers back.
+  # Where the broker is comes from the Config Server (spring.kafka.bootstrap-servers in
+  # credit-service-<profile>.yml); topics and retries are credit.messaging.* in
+  # credit-service.yml. Keys and values are text: the value is JSON read by the service.
+  kafka:
+    consumer:
+      group-id: credit-service
+      # A group that starts for the first time reads the commands already waiting in the topic.
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      # An answer counts as sent once every in-sync replica has it.
+      acks: all
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    listener:
+      # The position in the topic moves after each command, once its answer is out.
+      ack-mode: record
+    admin:
+      # Longest wait for the broker when the topics are declared at startup. Without a broker
+      # the service starts anyway and serves REST; the listener connects when the broker is up.
+      operation-timeout: 10s
+
+  reactor:
+    # The correlation id of a request reaches the logs of every thread that serves it.
+    context-propagation: auto
 
   jackson:
     # Optional fields of the contract are not nullable: absent means "does not apply"

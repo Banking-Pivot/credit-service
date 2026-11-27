@@ -22,6 +22,23 @@ info:
     - A credit card starts with outstandingDebt zero. Charges increase the debt and payments
       reduce it. availableCredit = creditLimit - outstandingDebt.
 
+    Due date and overdue debt (dates are days in the business zone, America/Lima):
+    - When the debt goes from zero to more than zero (the disbursement of a loan, the first
+      charge on a card) the product gets a dueDate: the next date whose day of the month is
+      paymentDueDay, strictly after that day.
+    - A payment that leaves no debt removes the dueDate. A payment that leaves debt and is at
+      least the minimum payment (5 % of the debt before the payment, rounded half up to two
+      decimals) moves it: an overdue product gets the next paymentDueDay after the day of the
+      payment; a product paid in its current cycle gets the dueDate of the next month; a
+      second payment in the same cycle does not move it again. A smaller payment only lowers
+      the debt.
+    - overdue is true when the product still owes and today is after its dueDate. It is
+      computed on every read.
+    - A customer with an overdue product cannot open another one (422 OVERDUE_DEBT) and an
+      overdue credit card accepts no charges (422 CREDIT_OVERDUE). Payments are always
+      accepted, from anybody: a payment does not say who pays.
+    - Changing paymentDueDay only affects the due dates set afterwards.
+
     Amounts use the product currency with at most two decimals and at most twelve integer
     digits. An amount with more decimals is rejected with 400 INVALID_REQUEST; nothing is
     rounded. Instants are UTC.
@@ -37,7 +54,7 @@ tags:
   - name: Reports
     description: Aggregated reports by product.
 paths:
-  /credits:
+  /api/v1/credits:
     post:
       tags: [Credits]
       operationId: openCredit
@@ -45,6 +62,7 @@ paths:
       description: |
         Checks the customer in Customer Service before writing anything. An unknown or
         inactive customer, or a product the customer type cannot hold, is rejected with 422.
+        So is a customer that has overdue debt in any credit product (OVERDUE_DEBT).
         If Customer Service does not answer within two seconds, fails, or its circuit breaker
         is open, the answer is 503 and nothing is written.
 
@@ -81,7 +99,7 @@ paths:
               description: URI of the new product.
               schema:
                 type: string
-                example: /credits/2c1f8e4a-7b3d-4f6e-9a1b-3c5d7e9f1a2b
+                example: /api/v1/credits/2c1f8e4a-7b3d-4f6e-9a1b-3c5d7e9f1a2b
             ETag:
               $ref: '#/components/headers/CreditETag'
           content:
@@ -98,6 +116,7 @@ paths:
                 outstandingDebt: 0.00
                 availableCredit: 1000.00
                 paymentDueDay: 15
+                overdue: false
                 status: ACTIVE
                 openedAt: '2026-11-16T15:00:00Z'
                 updatedAt: '2026-11-16T15:00:00Z'
@@ -113,7 +132,7 @@ paths:
                 code: PERSONAL_LOAN_ALREADY_EXISTS
                 message: The customer already has an active personal loan.
                 timestamp: '2026-11-16T15:00:00Z'
-                path: /credits
+                path: /api/v1/credits
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '422':
@@ -133,7 +152,8 @@ paths:
         customer is not looked up in Customer Service.
 
         Account Service checks for an active credit card with
-        customerId={id}&type=CREDIT_CARD&status=ACTIVE&size=1 and reads totalElements.
+        customerId={id}&type=CREDIT_CARD&status=ACTIVE&size=1 and reads totalElements, and
+        for overdue debt with customerId={id}&overdue=true&size=1.
 
         Orders by openedAt ascending, then id ascending. Pages are not snapshots;
         out-of-range pages return empty items with the real totalElements.
@@ -153,6 +173,13 @@ paths:
           in: query
           schema:
             $ref: '#/components/schemas/CreditStatus'
+        - name: overdue
+          in: query
+          description: |
+            true keeps the products that still owe after their dueDate; false keeps the
+            others. Without it both are listed.
+          schema:
+            type: boolean
       responses:
         '200':
           description: Credit page.
@@ -174,6 +201,8 @@ paths:
                         outstandingDebt: 300.00
                         availableCredit: 700.00
                         paymentDueDay: 15
+                        dueDate: '2026-12-15'
+                        overdue: false
                         status: ACTIVE
                         openedAt: '2026-11-16T15:00:00Z'
                         updatedAt: '2026-11-16T15:05:00Z'
@@ -193,7 +222,7 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '500':
           $ref: '#/components/responses/InternalError'
-  /credits/{creditId}:
+  /api/v1/credits/{creditId}:
     parameters:
       - $ref: '#/components/parameters/CreditId'
     get:
@@ -296,7 +325,7 @@ paths:
           $ref: '#/components/responses/PreconditionRequired'
         '500':
           $ref: '#/components/responses/InternalError'
-  /credits/{creditId}/debt:
+  /api/v1/credits/{creditId}/debt:
     parameters:
       - $ref: '#/components/parameters/CreditId'
     get:
@@ -324,7 +353,7 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
-  /credits/{creditId}/available-balance:
+  /api/v1/credits/{creditId}/available-balance:
     parameters:
       - $ref: '#/components/parameters/CreditId'
     get:
@@ -355,7 +384,7 @@ paths:
           $ref: '#/components/responses/BusinessRuleViolation'
         '500':
           $ref: '#/components/responses/InternalError'
-  /credits/{creditId}/charges:
+  /api/v1/credits/{creditId}/charges:
     parameters:
       - $ref: '#/components/parameters/CreditId'
     post:
@@ -394,7 +423,7 @@ paths:
           $ref: '#/components/responses/BusinessRuleViolation'
         '500':
           $ref: '#/components/responses/InternalError'
-  /credits/{creditId}/payments:
+  /api/v1/credits/{creditId}/payments:
     parameters:
       - $ref: '#/components/parameters/CreditId'
     post:
@@ -432,7 +461,7 @@ paths:
           $ref: '#/components/responses/BusinessRuleViolation'
         '500':
           $ref: '#/components/responses/InternalError'
-  /credits/{creditId}/movements:
+  /api/v1/credits/{creditId}/movements:
     parameters:
       - $ref: '#/components/parameters/CreditId'
     get:
@@ -459,7 +488,7 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
-  /credits/{creditId}/movements/latest:
+  /api/v1/credits/{creditId}/movements/latest:
     parameters:
       - $ref: '#/components/parameters/CreditId'
     get:
@@ -485,7 +514,7 @@ paths:
           $ref: '#/components/responses/BusinessRuleViolation'
         '500':
           $ref: '#/components/responses/InternalError'
-  /credits/reports/products:
+  /api/v1/credits/reports/products:
     get:
       tags: [Reports]
       operationId: getProductReport
@@ -628,7 +657,7 @@ components:
             code: OPERATION_ID_CONFLICT
             message: The operationId was already used with different data.
             timestamp: '2026-11-16T15:00:00Z'
-            path: /credits/2c1f8e4a-7b3d-4f6e-9a1b-3c5d7e9f1a2b/payments
+            path: /api/v1/credits/2c1f8e4a-7b3d-4f6e-9a1b-3c5d7e9f1a2b/payments
     CreditClosed:
       description: The product is CLOSED (CREDIT_CLOSED).
       content:
@@ -647,7 +676,7 @@ components:
             code: INVALID_REQUEST
             message: 'Invalid or missing fields: amount.'
             timestamp: '2026-11-16T15:00:00Z'
-            path: /credits/2c1f8e4a-7b3d-4f6e-9a1b-3c5d7e9f1a2b/charges
+            path: /api/v1/credits/2c1f8e4a-7b3d-4f6e-9a1b-3c5d7e9f1a2b/charges
     NotFound:
       description: The product in the path does not exist (CREDIT_NOT_FOUND).
       content:
@@ -658,7 +687,7 @@ components:
             code: CREDIT_NOT_FOUND
             message: The credit product does not exist.
             timestamp: '2026-11-16T15:00:00Z'
-            path: /credits/2c1f8e4a-7b3d-4f6e-9a1b-3c5d7e9f1a2b
+            path: /api/v1/credits/2c1f8e4a-7b3d-4f6e-9a1b-3c5d7e9f1a2b
     PreconditionFailed:
       description: If-Match does not match the current revision (CREDIT_VERSION_CONFLICT). Read the product again.
       content:
@@ -682,7 +711,8 @@ components:
         Well-formed request that breaks a business rule. The code identifies the rule:
         CUSTOMER_NOT_FOUND, CUSTOMER_INACTIVE, PRODUCT_NOT_ALLOWED, INVALID_PRODUCT_TERMS,
         INVALID_AMOUNT, NOT_A_CREDIT_CARD, CURRENCY_MISMATCH, INSUFFICIENT_AVAILABLE_CREDIT,
-        PAYMENT_EXCEEDS_DEBT, CREDIT_LIMIT_BELOW_DEBT, DEBT_NOT_ZERO.
+        PAYMENT_EXCEEDS_DEBT, CREDIT_LIMIT_BELOW_DEBT, DEBT_NOT_ZERO, OVERDUE_DEBT (opening a
+        product for a customer with overdue debt), CREDIT_OVERDUE (charge on an overdue card).
       content:
         application/json:
           schema:
@@ -691,7 +721,7 @@ components:
             code: INSUFFICIENT_AVAILABLE_CREDIT
             message: The charge exceeds the available credit of 700.00.
             timestamp: '2026-11-16T15:00:00Z'
-            path: /credits/2c1f8e4a-7b3d-4f6e-9a1b-3c5d7e9f1a2b/charges
+            path: /api/v1/credits/2c1f8e4a-7b3d-4f6e-9a1b-3c5d7e9f1a2b/charges
     DependencyUnavailable:
       description: |
         Customer Service did not answer within two seconds, failed, or its circuit breaker is
@@ -705,7 +735,7 @@ components:
             code: DEPENDENCY_UNAVAILABLE
             message: Customer Service is unavailable. Nothing was written; retry later.
             timestamp: '2026-11-16T15:00:00Z'
-            path: /credits
+            path: /api/v1/credits
     InternalError:
       description: An unexpected error prevented completion of the request. Nothing was written.
       content:
@@ -838,7 +868,7 @@ components:
     CreditResponse:
       title: CreditResponse
       type: object
-      required: [id, customerId, customerType, type, currency, outstandingDebt, paymentDueDay, status, openedAt, updatedAt]
+      required: [id, customerId, customerType, type, currency, outstandingDebt, paymentDueDay, overdue, status, openedAt, updatedAt]
       properties:
         id:
           type: string
@@ -869,6 +899,18 @@ components:
           example: 700.00
         paymentDueDay:
           $ref: '#/components/schemas/PaymentDueDay'
+        dueDate:
+          type: string
+          format: date
+          description: |
+            Day the next payment is due, in the business zone. Present only while the product
+            owes; a product that owed before due dates existed has none until its next charge
+            or qualifying payment.
+          example: '2026-12-15'
+        overdue:
+          type: boolean
+          description: The product still owes and today is after dueDate.
+          example: false
         status:
           $ref: '#/components/schemas/CreditStatus'
         openedAt:
@@ -1143,10 +1185,13 @@ components:
           example: '2026-11-16T15:00:00Z'
         path:
           type: string
-          example: /credits/2c1f8e4a-7b3d-4f6e-9a1b-3c5d7e9f1a2b
+          example: /api/v1/credits/2c1f8e4a-7b3d-4f6e-9a1b-3c5d7e9f1a2b
         traceId:
           type: string
-          description: Correlation identifier of the request.
+          description: >-
+            Correlation identifier of the request: the X-Correlation-ID header received, or
+            the one generated when it was absent. It is also returned in that header and
+            written in the logs of every service the request reached.
     CreditType:
       title: CreditType
       type: string
